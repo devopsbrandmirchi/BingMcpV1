@@ -1,6 +1,6 @@
 import { peekOperatorContext } from "@/lib/request-context";
 import { logger } from "@/lib/logger";
-import { MicrosoftApiError, MicrosoftRateLimitError, mapMicrosoftError } from "@/lib/errors";
+import { MicrosoftApiError, MicrosoftRateLimitError, ValidationError, mapMicrosoftError } from "@/lib/errors";
 import { buildMicrosoftHeaders, type MicrosoftRequestContext, type MicrosoftService } from "@/microsoft/client/headers";
 
 const MAX_RETRIES = 3;
@@ -32,24 +32,41 @@ function extractTrackingId(body: unknown, response: Response): string | undefine
   return response.headers.get("TrackingId") ?? undefined;
 }
 
-function microsoftErrorCode(body: unknown): number | undefined {
+interface MicrosoftErrorItem {
+  Code?: number;
+  ErrorCode?: string;
+  Message?: string;
+}
+
+function microsoftErrorItems(body: unknown): MicrosoftErrorItem[] {
   if (!body || typeof body !== "object") {
-    return undefined;
+    return [];
   }
-  const errors = (body as { Errors?: Array<{ Code?: number; ErrorCode?: string; Message?: string }> }).Errors;
-  return errors?.[0]?.Code;
+  const record = body as Record<string, unknown>;
+  const buckets = [record.Errors, record.OperationErrors, record.BatchErrors];
+  const items: MicrosoftErrorItem[] = [];
+  for (const bucket of buckets) {
+    if (Array.isArray(bucket)) {
+      items.push(...(bucket as MicrosoftErrorItem[]));
+    }
+  }
+  return items;
+}
+
+function microsoftErrorCode(body: unknown): number | undefined {
+  return microsoftErrorItems(body)[0]?.Code;
 }
 
 function microsoftErrorMessage(body: unknown, fallback: string): string {
-  if (!body || typeof body !== "object") {
-    return fallback;
-  }
-  const errors = (body as { Errors?: Array<{ Message?: string; ErrorCode?: string }> }).Errors;
-  const first = errors?.[0];
+  const first = microsoftErrorItems(body)[0];
   if (first?.Message) {
     return first.ErrorCode ? `${first.ErrorCode}: ${first.Message}` : first.Message;
   }
   return fallback;
+}
+
+function hasFatalMicrosoftErrors(body: unknown): boolean {
+  return microsoftErrorItems(body).length > 0;
 }
 
 export async function microsoftJsonRequest<T>(params: {
@@ -58,6 +75,15 @@ export async function microsoftJsonRequest<T>(params: {
   context: MicrosoftRequestContext;
   body?: unknown;
 }): Promise<T> {
+  if (
+    (params.service === "campaign-management" || params.service === "reporting") &&
+    !params.context.customerId
+  ) {
+    throw new ValidationError(
+      "A Microsoft Advertising customer ID is required for campaign and reporting calls. Reconnect the Microsoft account to refresh customers and accounts.",
+    );
+  }
+
   const requestId = peekOperatorContext()?.requestId;
   let lastError: unknown;
 
@@ -89,12 +115,21 @@ export async function microsoftJsonRequest<T>(params: {
       attempt,
     });
 
-    if (response.ok) {
+    if (response.ok && !hasFatalMicrosoftErrors(parsed)) {
       return parsed as T;
     }
 
     const errorCode = microsoftErrorCode(parsed);
     const message = microsoftErrorMessage(parsed, `Microsoft Advertising API returned HTTP ${response.status}.`);
+    logger.warn("Microsoft Advertising API error", {
+      requestId,
+      service: params.service,
+      url: params.url,
+      status: response.status,
+      trackingId,
+      errorCode,
+      message,
+    });
 
     if (errorCode === 117 || errorCode === 207 || response.status === 429) {
       lastError = new MicrosoftRateLimitError(message);

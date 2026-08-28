@@ -80,6 +80,7 @@ export async function searchAccounts(
   const response = await microsoftJsonRequest<{
     Accounts?: Array<Record<string, unknown>>;
     AdvertiserAccount?: Array<Record<string, unknown>>;
+    AdvertiserAccounts?: Array<Record<string, unknown>>;
   }>({
     service: "customer-management",
     url: `${CUSTOMER_MANAGEMENT_BASE}/Accounts/Search`,
@@ -99,7 +100,7 @@ export async function searchAccounts(
     },
   });
 
-  const raw = response.Accounts ?? response.AdvertiserAccount ?? [];
+  const raw = response.Accounts ?? response.AdvertiserAccounts ?? response.AdvertiserAccount ?? [];
   return raw
     .map((item) => ({
       customerId: String(item.ParentCustomerId ?? item.CustomerId ?? ""),

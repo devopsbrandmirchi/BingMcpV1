@@ -1,17 +1,11 @@
 import { microsoftJsonRequest } from "@/microsoft/client/http";
+import { toMicrosoftLong, toMicrosoftLongs } from "@/microsoft/client/ids";
 import { CAMPAIGN_MANAGEMENT_BASE } from "@/microsoft/client/version";
 import type { MicrosoftRequestContext } from "@/microsoft/client/headers";
 import type { Ad, AdGroup, Campaign, Keyword } from "@/microsoft/models/types";
 
-const ALL_CAMPAIGN_TYPES = [
-  "Search",
-  "Shopping",
-  "DynamicSearchAds",
-  "Audience",
-  "Hotel",
-  "PerformanceMax",
-  "App",
-];
+// REST CampaignType is a flags string, not a JSON array.
+const ALL_CAMPAIGN_TYPES = "Search Shopping DynamicSearchAds Audience Hotel PerformanceMax App";
 
 const ALL_AD_TYPES = [
   "Text",
@@ -58,7 +52,7 @@ export async function getCampaignsByAccountId(
     url: `${CAMPAIGN_MANAGEMENT_BASE}/Campaigns/QueryByAccountId`,
     context,
     body: {
-      AccountId: context.accountId,
+      AccountId: toMicrosoftLong(context.accountId, "accountId"),
       CampaignType: ALL_CAMPAIGN_TYPES,
     },
   });
@@ -85,7 +79,8 @@ export async function getCampaignsByIds(
     url: `${CAMPAIGN_MANAGEMENT_BASE}/Campaigns/QueryByIds`,
     context,
     body: {
-      CampaignIds: campaignIds,
+      AccountId: toMicrosoftLong(context.accountId, "accountId"),
+      CampaignIds: toMicrosoftLongs(campaignIds, "campaignId"),
       CampaignType: ALL_CAMPAIGN_TYPES,
     },
   });
@@ -113,7 +108,7 @@ export async function getAdGroupsByCampaignId(
     service: "campaign-management",
     url: `${CAMPAIGN_MANAGEMENT_BASE}/AdGroups/QueryByCampaignId`,
     context,
-    body: { CampaignId: campaignId },
+    body: { CampaignId: toMicrosoftLong(campaignId, "campaignId") },
   });
   return (response.AdGroups ?? []).map((item) => ({
     adGroupId: String(item.Id ?? ""),
@@ -133,7 +128,7 @@ export async function getAdGroupsByIds(
     service: "campaign-management",
     url: `${CAMPAIGN_MANAGEMENT_BASE}/AdGroups/QueryByIds`,
     context,
-    body: { AdGroupIds: adGroupIds },
+    body: { AdGroupIds: toMicrosoftLongs(adGroupIds, "adGroupId") },
   });
   return (response.AdGroups ?? [])
     .filter((item): item is Record<string, unknown> => Boolean(item))
@@ -157,7 +152,7 @@ export async function getAdsByAdGroupId(
     url: `${CAMPAIGN_MANAGEMENT_BASE}/Ads/QueryByAdGroupId`,
     context,
     body: {
-      AdGroupId: adGroupId,
+      AdGroupId: toMicrosoftLong(adGroupId, "adGroupId"),
       AdTypes: ALL_AD_TYPES,
     },
   });
@@ -185,7 +180,7 @@ export async function getAdsByIds(
     url: `${CAMPAIGN_MANAGEMENT_BASE}/Ads/QueryByIds`,
     context,
     body: {
-      AdIds: adIds,
+      AdIds: toMicrosoftLongs(adIds, "adId"),
       AdTypes: ALL_AD_TYPES,
     },
   });
@@ -215,7 +210,7 @@ export async function getKeywordsByAdGroupId(
     service: "campaign-management",
     url: `${CAMPAIGN_MANAGEMENT_BASE}/Keywords/QueryByAdGroupId`,
     context,
-    body: { AdGroupId: adGroupId },
+    body: { AdGroupId: toMicrosoftLong(adGroupId, "adGroupId") },
   });
   return (response.Keywords ?? []).map((item) => ({
     keywordId: String(item.Id ?? ""),
@@ -237,7 +232,7 @@ export async function getKeywordsByIds(
     service: "campaign-management",
     url: `${CAMPAIGN_MANAGEMENT_BASE}/Keywords/QueryByIds`,
     context,
-    body: { KeywordIds: keywordIds },
+    body: { KeywordIds: toMicrosoftLongs(keywordIds, "keywordId") },
   });
   return (response.Keywords ?? [])
     .filter((item): item is Record<string, unknown> => Boolean(item))

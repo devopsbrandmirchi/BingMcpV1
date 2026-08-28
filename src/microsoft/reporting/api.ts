@@ -4,6 +4,7 @@ import { ReportError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { peekOperatorContext } from "@/lib/request-context";
 import { microsoftJsonRequest } from "@/microsoft/client/http";
+import { toMicrosoftLong, toMicrosoftLongs } from "@/microsoft/client/ids";
 import { REPORTING_BASE } from "@/microsoft/client/version";
 import type { MicrosoftRequestContext } from "@/microsoft/client/headers";
 import type { NormalizedReport, ReportRow } from "@/microsoft/models/types";
@@ -183,20 +184,43 @@ export async function runPerformanceReport(params: {
   const requestId = peekOperatorContext()?.requestId;
   const columns = COLUMNS_BY_TYPE[params.type];
 
+  const accountId = toMicrosoftLong(params.context.accountId, "accountId");
+  const campaignIds = params.campaignIds?.length
+    ? toMicrosoftLongs(params.campaignIds, "campaignId")
+    : undefined;
+  const adGroupIds = params.adGroupIds?.length
+    ? toMicrosoftLongs(params.adGroupIds, "adGroupId")
+    : undefined;
+
+  const scope: Record<string, unknown> = {
+    AccountIds: [accountId],
+  };
+  if (campaignIds) {
+    scope.Campaigns = campaignIds.map((campaignId) => ({
+      AccountId: accountId,
+      CampaignId: campaignId,
+    }));
+  }
+  if (adGroupIds) {
+    scope.AdGroups = adGroupIds.map((adGroupId) => ({
+      AccountId: accountId,
+      ...(campaignIds?.[0] ? { CampaignId: campaignIds[0] } : {}),
+      AdGroupId: adGroupId,
+    }));
+  }
+
   const reportRequest: Record<string, unknown> = {
     Type: params.type,
     Format: "Csv",
+    FormatVersion: "2.0",
     ReportName: `bing-mcp-${params.type}`,
     ReturnOnlyCompleteData: false,
     Aggregation: "Daily",
+    ExcludeColumnHeaders: false,
     ExcludeReportFooter: true,
-    ExcludeReportHeader: false,
+    ExcludeReportHeader: true,
     Columns: columns,
-    Scope: {
-      AccountIds: [params.context.accountId],
-      Campaigns: params.campaignIds?.map((id) => ({ CampaignId: id })),
-      AdGroups: params.adGroupIds?.map((id) => ({ AdGroupId: id })),
-    },
+    Scope: scope,
     Time: {
       CustomDateRangeStart: toMicrosoftReportDate(range.startDate),
       CustomDateRangeEnd: toMicrosoftReportDate(range.endDate),
@@ -222,7 +246,7 @@ export async function runPerformanceReport(params: {
       ReportRequestStatus?: { Status?: string; ReportDownloadUrl?: string };
     }>({
       service: "reporting",
-      url: `${REPORTING_BASE}/GenerateReport/Query`,
+      url: `${REPORTING_BASE}/GenerateReport/Poll`,
       context: params.context,
       body: { ReportRequestId: reportRequestId },
     });
