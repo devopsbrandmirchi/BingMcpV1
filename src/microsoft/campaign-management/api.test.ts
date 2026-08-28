@@ -8,25 +8,19 @@ describe("Campaign Management adapters", () => {
     vi.restoreAllMocks();
   });
 
-  it("maps campaigns and ad groups", async () => {
+  it("maps SOAP campaigns and ad groups", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
         headers: new Headers(),
         text: async () =>
-          JSON.stringify({
-            Campaigns: [
-              { Id: 55, Name: "Search", Status: "Active", CampaignType: "Search", DailyBudget: 20 },
-            ],
-          }),
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><GetCampaignsByAccountIdResponse xmlns="https://bingads.microsoft.com/CampaignManagement/v13"><Campaigns><Campaign><Id>55</Id><Name>Search</Name><Status>Active</Status><CampaignType>Search</CampaignType><DailyBudget>20</DailyBudget></Campaign></Campaigns></GetCampaignsByAccountIdResponse></s:Body></s:Envelope>`,
       })
       .mockResolvedValueOnce({
         ok: true,
         headers: new Headers(),
         text: async () =>
-          JSON.stringify({
-            AdGroups: [{ Id: 77, Name: "Brand", Status: "Paused" }],
-          }),
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><GetAdGroupsByCampaignIdResponse xmlns="https://bingads.microsoft.com/CampaignManagement/v13"><AdGroups><AdGroup><Id>77</Id><Name>Brand</Name><Status>Paused</Status></AdGroup></AdGroups></GetAdGroupsByCampaignIdResponse></s:Body></s:Envelope>`,
       });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -34,16 +28,14 @@ describe("Campaign Management adapters", () => {
     const campaigns = await getCampaignsByAccountId(context);
     expect(campaigns[0]?.campaignId).toBe("55");
     expect(campaigns[0]?.name).toBe("Search");
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
-      AccountId: 123,
-      CampaignType: "Search Shopping DynamicSearchAds Audience Hotel PerformanceMax App",
-    });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("CampaignManagementService.svc");
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain("GetCampaignsByAccountIdRequest");
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain("<CampaignType>Search Shopping DynamicSearchAds Audience Hotel PerformanceMax App</CampaignType>");
+    expect(String(fetchMock.mock.calls[0]?.[1]?.headers?.SOAPAction)).toBe('"GetCampaignsByAccountId"');
 
     const adGroups = await getAdGroupsByCampaignId(context, "55");
     expect(adGroups[0]?.adGroupId).toBe("77");
     expect(adGroups[0]?.status).toBe("Paused");
-    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
-      CampaignId: 55,
-    });
+    expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain("<CampaignId>55</CampaignId>");
   });
 });

@@ -1,10 +1,12 @@
-import { microsoftJsonRequest } from "@/microsoft/client/http";
-import { toMicrosoftLong, toMicrosoftLongs } from "@/microsoft/client/ids";
-import { CAMPAIGN_MANAGEMENT_BASE } from "@/microsoft/client/version";
+import { microsoftSoapRequest } from "@/microsoft/client/soap";
+import { childBlocks, childText, longArrayXml, stringArrayXml, stripXmlNamespaces } from "@/microsoft/client/xml";
+import {
+  CAMPAIGN_MANAGEMENT_NAMESPACE,
+  CAMPAIGN_MANAGEMENT_SOAP_URL,
+} from "@/microsoft/client/version";
 import type { MicrosoftRequestContext } from "@/microsoft/client/headers";
 import type { Ad, AdGroup, Campaign, Keyword } from "@/microsoft/models/types";
 
-// REST CampaignType is a flags string, not a JSON array.
 const ALL_CAMPAIGN_TYPES = "Search Shopping DynamicSearchAds Audience Hotel PerformanceMax App";
 
 const ALL_AD_TYPES = [
@@ -19,232 +21,225 @@ const ALL_AD_TYPES = [
   "DynamicSearch",
 ];
 
-function asString(value: unknown): string | null {
-  if (value === null || value === undefined) {
+function asString(value: string | null | undefined): string | null {
+  return value && value.length > 0 ? value : null;
+}
+
+function asNumber(value: string | null | undefined): number | null {
+  if (!value) {
     return null;
   }
-  return String(value);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-function asNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
+async function campaignSoap(
+  context: MicrosoftRequestContext & { customerId: string; accountId: string },
+  action: string,
+  innerXml: string,
+): Promise<string> {
+  const xml = await microsoftSoapRequest({
+    service: "campaign-management",
+    url: CAMPAIGN_MANAGEMENT_SOAP_URL,
+    action,
+    namespace: CAMPAIGN_MANAGEMENT_NAMESPACE,
+    context,
+    bodyXml: `<${action}Request xmlns="${CAMPAIGN_MANAGEMENT_NAMESPACE}">${innerXml}</${action}Request>`,
+  });
+  return stripXmlNamespaces(xml);
 }
 
-function asStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
+function mapCampaign(
+  block: string,
+  context: { accountId: string; customerId: string },
+): Campaign | null {
+  const campaignId = childText(block, "Id");
+  if (!campaignId) {
+    return null;
   }
-  return value.map((item) => String(item)).filter(Boolean);
+  return {
+    campaignId,
+    accountId: context.accountId,
+    customerId: context.customerId,
+    name: asString(childText(block, "Name")),
+    status: asString(childText(block, "Status")),
+    campaignType: asString(childText(block, "CampaignType")),
+    budget: asNumber(childText(block, "DailyBudget") ?? childText(block, "Budget")),
+    budgetType: asString(childText(block, "BudgetType")),
+    timeZone: asString(childText(block, "TimeZone")),
+  };
+}
+
+function mapAdGroup(
+  block: string,
+  context: { accountId: string; customerId: string; campaignId?: string },
+): AdGroup | null {
+  const adGroupId = childText(block, "Id");
+  if (!adGroupId) {
+    return null;
+  }
+  return {
+    adGroupId,
+    campaignId: asString(childText(block, "CampaignId")) ?? context.campaignId ?? "",
+    accountId: context.accountId,
+    customerId: context.customerId,
+    name: asString(childText(block, "Name")),
+    status: asString(childText(block, "Status")),
+  };
+}
+
+function mapAd(
+  block: string,
+  context: { accountId: string; customerId: string; adGroupId?: string },
+): Ad | null {
+  const adId = childText(block, "Id");
+  if (!adId) {
+    return null;
+  }
+  const finalUrlsXml = childText(block, "FinalUrls");
+  return {
+    adId,
+    adGroupId: asString(childText(block, "AdGroupId")) ?? context.adGroupId ?? "",
+    accountId: context.accountId,
+    customerId: context.customerId,
+    type: asString(childText(block, "Type")),
+    status: asString(childText(block, "Status")),
+    editorialStatus: asString(childText(block, "EditorialStatus")),
+    headline: asString(childText(block, "Title") ?? childText(block, "Headline")),
+    text: asString(childText(block, "Text")),
+    displayUrl: asString(childText(block, "DisplayUrl")),
+    finalUrls: finalUrlsXml ? childBlocks(finalUrlsXml, "string").map((item) => item.trim()).filter(Boolean) : [],
+  };
+}
+
+function mapKeyword(
+  block: string,
+  context: { accountId: string; customerId: string; adGroupId?: string },
+): Keyword | null {
+  const keywordId = childText(block, "Id");
+  if (!keywordId) {
+    return null;
+  }
+  const bidXml = childText(block, "Bid");
+  return {
+    keywordId,
+    adGroupId: asString(childText(block, "AdGroupId")) ?? context.adGroupId ?? "",
+    accountId: context.accountId,
+    customerId: context.customerId,
+    text: asString(childText(block, "Text")),
+    matchType: asString(childText(block, "MatchType")),
+    status: asString(childText(block, "Status")),
+    bid: asNumber(bidXml ? childText(bidXml, "Amount") : null) ?? asNumber(bidXml),
+  };
 }
 
 export async function getCampaignsByAccountId(
   context: MicrosoftRequestContext & { customerId: string; accountId: string },
 ): Promise<Campaign[]> {
-  const response = await microsoftJsonRequest<{ Campaigns?: Array<Record<string, unknown>> }>({
-    service: "campaign-management",
-    url: `${CAMPAIGN_MANAGEMENT_BASE}/Campaigns/QueryByAccountId`,
+  const xml = await campaignSoap(
     context,
-    body: {
-      AccountId: toMicrosoftLong(context.accountId, "accountId"),
-      CampaignType: ALL_CAMPAIGN_TYPES,
-    },
-  });
-
-  return (response.Campaigns ?? []).map((item) => ({
-    campaignId: String(item.Id ?? ""),
-    accountId: context.accountId,
-    customerId: context.customerId,
-    name: asString(item.Name),
-    status: asString(item.Status),
-    campaignType: asString(item.CampaignType),
-    budget: asNumber(item.DailyBudget ?? item.Budget),
-    budgetType: asString(item.BudgetType),
-    timeZone: asString(item.TimeZone),
-  })).filter((item) => item.campaignId);
+    "GetCampaignsByAccountId",
+    `<AccountId>${context.accountId}</AccountId><CampaignType>${ALL_CAMPAIGN_TYPES}</CampaignType>`,
+  );
+  return childBlocks(xml, "Campaign")
+    .map((block) => mapCampaign(block, context))
+    .filter((item): item is Campaign => Boolean(item));
 }
 
 export async function getCampaignsByIds(
   context: MicrosoftRequestContext & { customerId: string; accountId: string },
   campaignIds: string[],
 ): Promise<Campaign[]> {
-  const response = await microsoftJsonRequest<{ Campaigns?: Array<Record<string, unknown> | null> }>({
-    service: "campaign-management",
-    url: `${CAMPAIGN_MANAGEMENT_BASE}/Campaigns/QueryByIds`,
+  const xml = await campaignSoap(
     context,
-    body: {
-      AccountId: toMicrosoftLong(context.accountId, "accountId"),
-      CampaignIds: toMicrosoftLongs(campaignIds, "campaignId"),
-      CampaignType: ALL_CAMPAIGN_TYPES,
-    },
-  });
-  return (response.Campaigns ?? [])
-    .filter((item): item is Record<string, unknown> => Boolean(item))
-    .map((item) => ({
-      campaignId: String(item.Id ?? ""),
-      accountId: context.accountId,
-      customerId: context.customerId,
-      name: asString(item.Name),
-      status: asString(item.Status),
-      campaignType: asString(item.CampaignType),
-      budget: asNumber(item.DailyBudget ?? item.Budget),
-      budgetType: asString(item.BudgetType),
-      timeZone: asString(item.TimeZone),
-    }))
-    .filter((item) => item.campaignId);
+    "GetCampaignsByIds",
+    `<AccountId>${context.accountId}</AccountId>${longArrayXml("CampaignIds", campaignIds)}<CampaignType>${ALL_CAMPAIGN_TYPES}</CampaignType>`,
+  );
+  return childBlocks(xml, "Campaign")
+    .map((block) => mapCampaign(block, context))
+    .filter((item): item is Campaign => Boolean(item));
 }
 
 export async function getAdGroupsByCampaignId(
   context: MicrosoftRequestContext & { customerId: string; accountId: string },
   campaignId: string,
 ): Promise<AdGroup[]> {
-  const response = await microsoftJsonRequest<{ AdGroups?: Array<Record<string, unknown>> }>({
-    service: "campaign-management",
-    url: `${CAMPAIGN_MANAGEMENT_BASE}/AdGroups/QueryByCampaignId`,
+  const xml = await campaignSoap(
     context,
-    body: { CampaignId: toMicrosoftLong(campaignId, "campaignId") },
-  });
-  return (response.AdGroups ?? []).map((item) => ({
-    adGroupId: String(item.Id ?? ""),
-    campaignId,
-    accountId: context.accountId,
-    customerId: context.customerId,
-    name: asString(item.Name),
-    status: asString(item.Status),
-  })).filter((item) => item.adGroupId);
+    "GetAdGroupsByCampaignId",
+    `<CampaignId>${campaignId}</CampaignId>`,
+  );
+  return childBlocks(xml, "AdGroup")
+    .map((block) => mapAdGroup(block, { ...context, campaignId }))
+    .filter((item): item is AdGroup => Boolean(item));
 }
 
 export async function getAdGroupsByIds(
   context: MicrosoftRequestContext & { customerId: string; accountId: string },
   adGroupIds: string[],
 ): Promise<AdGroup[]> {
-  const response = await microsoftJsonRequest<{ AdGroups?: Array<Record<string, unknown> | null> }>({
-    service: "campaign-management",
-    url: `${CAMPAIGN_MANAGEMENT_BASE}/AdGroups/QueryByIds`,
+  const xml = await campaignSoap(
     context,
-    body: { AdGroupIds: toMicrosoftLongs(adGroupIds, "adGroupId") },
-  });
-  return (response.AdGroups ?? [])
-    .filter((item): item is Record<string, unknown> => Boolean(item))
-    .map((item) => ({
-      adGroupId: String(item.Id ?? ""),
-      campaignId: asString(item.CampaignId) ?? "",
-      accountId: context.accountId,
-      customerId: context.customerId,
-      name: asString(item.Name),
-      status: asString(item.Status),
-    }))
-    .filter((item) => item.adGroupId);
+    "GetAdGroupsByIds",
+    longArrayXml("AdGroupIds", adGroupIds),
+  );
+  return childBlocks(xml, "AdGroup")
+    .map((block) => mapAdGroup(block, context))
+    .filter((item): item is AdGroup => Boolean(item));
 }
 
 export async function getAdsByAdGroupId(
   context: MicrosoftRequestContext & { customerId: string; accountId: string },
   adGroupId: string,
 ): Promise<Ad[]> {
-  const response = await microsoftJsonRequest<{ Ads?: Array<Record<string, unknown>> }>({
-    service: "campaign-management",
-    url: `${CAMPAIGN_MANAGEMENT_BASE}/Ads/QueryByAdGroupId`,
+  const xml = await campaignSoap(
     context,
-    body: {
-      AdGroupId: toMicrosoftLong(adGroupId, "adGroupId"),
-      AdTypes: ALL_AD_TYPES,
-    },
-  });
-  return (response.Ads ?? []).map((item) => ({
-    adId: String(item.Id ?? ""),
-    adGroupId,
-    accountId: context.accountId,
-    customerId: context.customerId,
-    type: asString(item.Type),
-    status: asString(item.Status),
-    editorialStatus: asString(item.EditorialStatus),
-    headline: asString(item.Title ?? item.Headline),
-    text: asString(item.Text),
-    displayUrl: asString(item.DisplayUrl),
-    finalUrls: asStringArray(item.FinalUrls),
-  })).filter((item) => item.adId);
+    "GetAdsByAdGroupId",
+    `<AdGroupId>${adGroupId}</AdGroupId>${stringArrayXml("AdTypes", "AdType", ALL_AD_TYPES)}`,
+  );
+  return childBlocks(xml, "Ad")
+    .map((block) => mapAd(block, { ...context, adGroupId }))
+    .filter((item): item is Ad => Boolean(item));
 }
 
 export async function getAdsByIds(
   context: MicrosoftRequestContext & { customerId: string; accountId: string },
   adIds: string[],
 ): Promise<Ad[]> {
-  const response = await microsoftJsonRequest<{ Ads?: Array<Record<string, unknown> | null> }>({
-    service: "campaign-management",
-    url: `${CAMPAIGN_MANAGEMENT_BASE}/Ads/QueryByIds`,
+  const xml = await campaignSoap(
     context,
-    body: {
-      AdIds: toMicrosoftLongs(adIds, "adId"),
-      AdTypes: ALL_AD_TYPES,
-    },
-  });
-  return (response.Ads ?? [])
-    .filter((item): item is Record<string, unknown> => Boolean(item))
-    .map((item) => ({
-      adId: String(item.Id ?? ""),
-      adGroupId: asString(item.AdGroupId) ?? "",
-      accountId: context.accountId,
-      customerId: context.customerId,
-      type: asString(item.Type),
-      status: asString(item.Status),
-      editorialStatus: asString(item.EditorialStatus),
-      headline: asString(item.Title ?? item.Headline),
-      text: asString(item.Text),
-      displayUrl: asString(item.DisplayUrl),
-      finalUrls: asStringArray(item.FinalUrls),
-    }))
-    .filter((item) => item.adId);
+    "GetAdsByIds",
+    `${longArrayXml("AdIds", adIds)}${stringArrayXml("AdTypes", "AdType", ALL_AD_TYPES)}`,
+  );
+  return childBlocks(xml, "Ad")
+    .map((block) => mapAd(block, context))
+    .filter((item): item is Ad => Boolean(item));
 }
 
 export async function getKeywordsByAdGroupId(
   context: MicrosoftRequestContext & { customerId: string; accountId: string },
   adGroupId: string,
 ): Promise<Keyword[]> {
-  const response = await microsoftJsonRequest<{ Keywords?: Array<Record<string, unknown>> }>({
-    service: "campaign-management",
-    url: `${CAMPAIGN_MANAGEMENT_BASE}/Keywords/QueryByAdGroupId`,
+  const xml = await campaignSoap(
     context,
-    body: { AdGroupId: toMicrosoftLong(adGroupId, "adGroupId") },
-  });
-  return (response.Keywords ?? []).map((item) => ({
-    keywordId: String(item.Id ?? ""),
-    adGroupId,
-    accountId: context.accountId,
-    customerId: context.customerId,
-    text: asString(item.Text),
-    matchType: asString(item.MatchType),
-    status: asString(item.Status),
-    bid: asNumber((item.Bid as { Amount?: unknown } | undefined)?.Amount ?? item.Bid),
-  })).filter((item) => item.keywordId);
+    "GetKeywordsByAdGroupId",
+    `<AdGroupId>${adGroupId}</AdGroupId>`,
+  );
+  return childBlocks(xml, "Keyword")
+    .map((block) => mapKeyword(block, { ...context, adGroupId }))
+    .filter((item): item is Keyword => Boolean(item));
 }
 
 export async function getKeywordsByIds(
   context: MicrosoftRequestContext & { customerId: string; accountId: string },
   keywordIds: string[],
 ): Promise<Keyword[]> {
-  const response = await microsoftJsonRequest<{ Keywords?: Array<Record<string, unknown> | null> }>({
-    service: "campaign-management",
-    url: `${CAMPAIGN_MANAGEMENT_BASE}/Keywords/QueryByIds`,
+  const xml = await campaignSoap(
     context,
-    body: { KeywordIds: toMicrosoftLongs(keywordIds, "keywordId") },
-  });
-  return (response.Keywords ?? [])
-    .filter((item): item is Record<string, unknown> => Boolean(item))
-    .map((item) => ({
-      keywordId: String(item.Id ?? ""),
-      adGroupId: asString(item.AdGroupId) ?? "",
-      accountId: context.accountId,
-      customerId: context.customerId,
-      text: asString(item.Text),
-      matchType: asString(item.MatchType),
-      status: asString(item.Status),
-      bid: asNumber((item.Bid as { Amount?: unknown } | undefined)?.Amount ?? item.Bid),
-    }))
-    .filter((item) => item.keywordId);
+    "GetKeywordsByIds",
+    longArrayXml("KeywordIds", keywordIds),
+  );
+  return childBlocks(xml, "Keyword")
+    .map((block) => mapKeyword(block, context))
+    .filter((item): item is Keyword => Boolean(item));
 }

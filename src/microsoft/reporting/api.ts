@@ -3,9 +3,9 @@ import { assertDateRange, toMicrosoftReportDate } from "@/lib/dates";
 import { ReportError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { peekOperatorContext } from "@/lib/request-context";
-import { microsoftJsonRequest } from "@/microsoft/client/http";
-import { toMicrosoftLong, toMicrosoftLongs } from "@/microsoft/client/ids";
-import { REPORTING_BASE } from "@/microsoft/client/version";
+import { microsoftSoapRequest } from "@/microsoft/client/soap";
+import { childText, longArrayXml, stripXmlNamespaces, xmlEscape } from "@/microsoft/client/xml";
+import { REPORTING_NAMESPACE, REPORTING_SOAP_URL } from "@/microsoft/client/version";
 import type { MicrosoftRequestContext } from "@/microsoft/client/headers";
 import type { NormalizedReport, ReportRow } from "@/microsoft/models/types";
 
@@ -183,58 +183,58 @@ export async function runPerformanceReport(params: {
   const range = assertDateRange(params.startDate, params.endDate);
   const requestId = peekOperatorContext()?.requestId;
   const columns = COLUMNS_BY_TYPE[params.type];
+  const columnTag = params.type.replace("Request", "Column");
+  const start = toMicrosoftReportDate(range.startDate);
+  const end = toMicrosoftReportDate(range.endDate);
 
-  const accountId = toMicrosoftLong(params.context.accountId, "accountId");
-  const campaignIds = params.campaignIds?.length
-    ? toMicrosoftLongs(params.campaignIds, "campaignId")
-    : undefined;
-  const adGroupIds = params.adGroupIds?.length
-    ? toMicrosoftLongs(params.adGroupIds, "adGroupId")
-    : undefined;
+  const campaignScope = params.campaignIds?.length
+    ? `<Campaigns>${params.campaignIds
+        .map(
+          (campaignId) =>
+            `<CampaignReportScope><AccountId>${xmlEscape(params.context.accountId)}</AccountId><CampaignId>${xmlEscape(campaignId)}</CampaignId></CampaignReportScope>`,
+        )
+        .join("")}</Campaigns>`
+    : "";
+  const adGroupScope = params.adGroupIds?.length
+    ? `<AdGroups>${params.adGroupIds
+        .map(
+          (adGroupId) =>
+            `<AdGroupReportScope><AccountId>${xmlEscape(params.context.accountId)}</AccountId>${
+              params.campaignIds?.[0] ? `<CampaignId>${xmlEscape(params.campaignIds[0])}</CampaignId>` : ""
+            }<AdGroupId>${xmlEscape(adGroupId)}</AdGroupId></AdGroupReportScope>`,
+        )
+        .join("")}</AdGroups>`
+    : "";
 
-  const scope: Record<string, unknown> = {
-    AccountIds: [accountId],
-  };
-  if (campaignIds) {
-    scope.Campaigns = campaignIds.map((campaignId) => ({
-      AccountId: accountId,
-      CampaignId: campaignId,
-    }));
-  }
-  if (adGroupIds) {
-    scope.AdGroups = adGroupIds.map((adGroupId) => ({
-      AccountId: accountId,
-      ...(campaignIds?.[0] ? { CampaignId: campaignIds[0] } : {}),
-      AdGroupId: adGroupId,
-    }));
-  }
-
-  const reportRequest: Record<string, unknown> = {
-    Type: params.type,
-    Format: "Csv",
-    FormatVersion: "2.0",
-    ReportName: `bing-mcp-${params.type}`,
-    ReturnOnlyCompleteData: false,
-    Aggregation: "Daily",
-    ExcludeColumnHeaders: false,
-    ExcludeReportFooter: true,
-    ExcludeReportHeader: true,
-    Columns: columns,
-    Scope: scope,
-    Time: {
-      CustomDateRangeStart: toMicrosoftReportDate(range.startDate),
-      CustomDateRangeEnd: toMicrosoftReportDate(range.endDate),
-    },
-  };
-
-  const submitted = await microsoftJsonRequest<{ ReportRequestId?: string }>({
+  const submitXml = await microsoftSoapRequest({
     service: "reporting",
-    url: `${REPORTING_BASE}/GenerateReport/Submit`,
+    url: REPORTING_SOAP_URL,
+    action: "SubmitGenerateReport",
+    namespace: REPORTING_NAMESPACE,
     context: params.context,
-    body: { ReportRequest: reportRequest },
+    bodyXml: [
+      `<SubmitGenerateReportRequest xmlns="${REPORTING_NAMESPACE}">`,
+      `<ReportRequest i:type="${params.type}">`,
+      `<ExcludeColumnHeaders>false</ExcludeColumnHeaders>`,
+      `<ExcludeReportFooter>true</ExcludeReportFooter>`,
+      `<ExcludeReportHeader>true</ExcludeReportHeader>`,
+      `<Format>Csv</Format>`,
+      `<FormatVersion>2.0</FormatVersion>`,
+      `<ReportName>${xmlEscape(`bing-mcp-${params.type}`)}</ReportName>`,
+      `<ReturnOnlyCompleteData>false</ReturnOnlyCompleteData>`,
+      `<Aggregation>Daily</Aggregation>`,
+      `<Columns>${columns.map((column) => `<${columnTag}>${xmlEscape(column)}</${columnTag}>`).join("")}</Columns>`,
+      `<Scope>${longArrayXml("AccountIds", [params.context.accountId])}${campaignScope}${adGroupScope}</Scope>`,
+      `<Time>`,
+      `<CustomDateRangeStart><Day>${start.Day}</Day><Month>${start.Month}</Month><Year>${start.Year}</Year></CustomDateRangeStart>`,
+      `<CustomDateRangeEnd><Day>${end.Day}</Day><Month>${end.Month}</Month><Year>${end.Year}</Year></CustomDateRangeEnd>`,
+      `</Time>`,
+      `</ReportRequest>`,
+      `</SubmitGenerateReportRequest>`,
+    ].join(""),
   });
 
-  const reportRequestId = submitted.ReportRequestId;
+  const reportRequestId = childText(stripXmlNamespaces(submitXml), "ReportRequestId");
   if (!reportRequestId) {
     throw new ReportError("Microsoft Advertising did not return a report request ID.");
   }
@@ -242,18 +242,19 @@ export async function runPerformanceReport(params: {
   const started = Date.now();
   let downloadUrl: string | undefined;
   while (Date.now() - started < MAX_POLL_MS) {
-    const polled = await microsoftJsonRequest<{
-      ReportRequestStatus?: { Status?: string; ReportDownloadUrl?: string };
-    }>({
+    const polledXml = await microsoftSoapRequest({
       service: "reporting",
-      url: `${REPORTING_BASE}/GenerateReport/Poll`,
+      url: REPORTING_SOAP_URL,
+      action: "PollGenerateReport",
+      namespace: REPORTING_NAMESPACE,
       context: params.context,
-      body: { ReportRequestId: reportRequestId },
+      bodyXml: `<PollGenerateReportRequest xmlns="${REPORTING_NAMESPACE}"><ReportRequestId>${xmlEscape(reportRequestId)}</ReportRequestId></PollGenerateReportRequest>`,
     });
-    const status = polled.ReportRequestStatus?.Status;
+    const polled = stripXmlNamespaces(polledXml);
+    const status = childText(polled, "Status");
     logger.info("Microsoft report poll", { requestId, reportRequestId, status });
     if (status === "Success") {
-      downloadUrl = polled.ReportRequestStatus?.ReportDownloadUrl;
+      downloadUrl = childText(polled, "ReportDownloadUrl") ?? undefined;
       break;
     }
     if (status === "Error" || status === "Failed") {
