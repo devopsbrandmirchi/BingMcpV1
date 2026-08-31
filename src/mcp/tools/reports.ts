@@ -2,7 +2,12 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { toToolErrorText } from "@/lib/errors";
 import type { ReportTimePeriod } from "@/lib/dates";
-import { runPerformanceReport, type PerformanceReportType } from "@/microsoft/reporting/api";
+import {
+  rankSearchQueryRows,
+  runPerformanceReport,
+  SEARCH_QUERY_SORT_FIELDS,
+  type PerformanceReportType,
+} from "@/microsoft/reporting/api";
 import {
   isoDateSchema,
   jsonToolResult,
@@ -147,6 +152,48 @@ export function registerReportTools(server: McpServer): void {
             adGroupIds: input.adGroupId ? [input.adGroupId] : undefined,
           }),
         );
+      } catch (error) {
+        return { content: [{ type: "text", text: toToolErrorText(error) }], isError: true };
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_search_query_performance",
+    {
+      title: "Search query performance report",
+      description:
+        "Returns actual user search queries (search terms) that triggered ads, not the keywords you bid on. Uses Microsoft SearchQueryPerformanceReport. Prefer period=ThisMonth or ThisWeek, or startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId or adGroupId. Default sort is spend descending. Microsoft only returns queries with a significant number of clicks in the last 30 days, and search-query data applies to Search/search-network campaigns (not Performance Max). Current-day data may be incomplete.",
+      inputSchema: z.object({
+        ...reportBase,
+        campaignId: microsoftIdSchema.optional(),
+        adGroupId: microsoftIdSchema.optional(),
+        sortBy: z.enum(SEARCH_QUERY_SORT_FIELDS).default("spend"),
+        limit: z.number().int().min(1).max(1000).default(20),
+        minClicks: z.number().int().min(0).optional(),
+        maxConversions: z.number().min(0).optional(),
+      }),
+    },
+    async (input) => {
+      try {
+        const report = await runReport("SearchQueryPerformanceReportRequest", {
+          ...input,
+          campaignIds: input.campaignId ? [input.campaignId] : undefined,
+          adGroupIds: input.adGroupId ? [input.adGroupId] : undefined,
+        });
+        const rows = rankSearchQueryRows(report.rows, {
+          sortBy: input.sortBy,
+          limit: input.limit,
+          minClicks: input.minClicks,
+          maxConversions: input.maxConversions,
+        });
+        return jsonToolResult({
+          ...report,
+          rows,
+          rowCount: rows.length,
+          truncated: report.truncated || report.rows.length > rows.length,
+          sortBy: input.sortBy,
+        });
       } catch (error) {
         return { content: [{ type: "text", text: toToolErrorText(error) }], isError: true };
       }

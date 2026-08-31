@@ -123,12 +123,15 @@ export interface ReportRow {
   adGroupName?: string;
   keywordId?: string;
   keyword?: string;
+  searchQuery?: string;
   impressions?: number;
   clicks?: number;
   spend?: number;
   ctr?: number;
   averageCpc?: number;
   conversions?: number;
+  conversionRate?: number;
+  costPerConversion?: number | null;
 }
 
 export interface NormalizedReport {

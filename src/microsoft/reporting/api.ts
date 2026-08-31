@@ -17,7 +17,11 @@ export type PerformanceReportType =
   | "AccountPerformanceReportRequest"
   | "CampaignPerformanceReportRequest"
   | "AdGroupPerformanceReportRequest"
-  | "KeywordPerformanceReportRequest";
+  | "KeywordPerformanceReportRequest"
+  | "SearchQueryPerformanceReportRequest";
+
+export const SEARCH_QUERY_SORT_FIELDS = ["spend", "clicks", "impressions", "conversions"] as const;
+export type SearchQuerySortField = (typeof SEARCH_QUERY_SORT_FIELDS)[number];
 
 const COLUMNS_BY_TYPE: Record<PerformanceReportType, string[]> = {
   AccountPerformanceReportRequest: [
@@ -74,6 +78,23 @@ const COLUMNS_BY_TYPE: Record<PerformanceReportType, string[]> = {
     "AverageCpc",
     "Conversions",
   ],
+  SearchQueryPerformanceReportRequest: [
+    "AccountId",
+    "CampaignId",
+    "CampaignName",
+    "AdGroupId",
+    "AdGroupName",
+    "SearchQuery",
+    "Keyword",
+    "Impressions",
+    "Clicks",
+    "Spend",
+    "Ctr",
+    "AverageCpc",
+    "Conversions",
+    "ConversionRate",
+    "CostPerConversion",
+  ],
 };
 
 function sleep(ms: number): Promise<void> {
@@ -94,7 +115,9 @@ function parseNumber(value: string | undefined): number | undefined {
 
 function parseCsv(text: string): Array<Record<string, string>> {
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.length > 0);
-  const headerIndex = lines.findIndex((line) => /TimePeriod|GregorianDate|AccountId|Impressions/i.test(line));
+  const headerIndex = lines.findIndex((line) =>
+    /TimePeriod|GregorianDate|AccountId|Impressions|SearchQuery/i.test(line),
+  );
   if (headerIndex < 0) {
     return [];
   }
@@ -169,7 +192,42 @@ function unzipFirstTextFile(buffer: Uint8Array): string {
   return new TextDecoder("utf-8").decode(files[preferred]);
 }
 
+function isDiscardedReportRow(raw: Record<string, string>): boolean {
+  const time = (raw.TimePeriod || raw.GregorianDate || "").trim();
+  if (/^(total|totals|summary)$/i.test(time)) {
+    return true;
+  }
+  if ("SearchQuery" in raw) {
+    const query = (raw.SearchQuery || "").trim();
+    if (!query || /^(total|totals|summary)$/i.test(query)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function costPerConversion(
+  raw: Record<string, string>,
+  spend: number | undefined,
+  conversions: number | undefined,
+): number | null | undefined {
+  const fromMicrosoft = parseNumber(raw.CostPerConversion);
+  if (fromMicrosoft !== undefined) {
+    return fromMicrosoft;
+  }
+  if (!("CostPerConversion" in raw) && !("SearchQuery" in raw)) {
+    return undefined;
+  }
+  if (conversions && conversions > 0 && spend !== undefined) {
+    return spend / conversions;
+  }
+  return null;
+}
+
 function mapRow(raw: Record<string, string>): ReportRow {
+  const spend = parseNumber(raw.Spend);
+  const conversions = parseNumber(raw.Conversions);
+  const searchQuery = raw.SearchQuery?.trim() || undefined;
   return {
     date: raw.TimePeriod || raw.GregorianDate || undefined,
     accountId: raw.AccountId || undefined,
@@ -180,13 +238,38 @@ function mapRow(raw: Record<string, string>): ReportRow {
     adGroupName: raw.AdGroupName || undefined,
     keywordId: raw.KeywordId || undefined,
     keyword: raw.Keyword || undefined,
+    searchQuery,
     impressions: parseNumber(raw.Impressions),
     clicks: parseNumber(raw.Clicks),
-    spend: parseNumber(raw.Spend),
+    spend,
     ctr: parseNumber(raw.Ctr),
     averageCpc: parseNumber(raw.AverageCpc),
-    conversions: parseNumber(raw.Conversions),
+    conversions,
+    conversionRate: parseNumber(raw.ConversionRate),
+    costPerConversion: costPerConversion(raw, spend, conversions),
   };
+}
+
+export function rankSearchQueryRows(
+  rows: ReportRow[],
+  options: {
+    sortBy?: SearchQuerySortField;
+    limit?: number;
+    minClicks?: number;
+    maxConversions?: number;
+  } = {},
+): ReportRow[] {
+  let filtered = rows;
+  if (options.minClicks !== undefined) {
+    filtered = filtered.filter((row) => (row.clicks ?? 0) >= options.minClicks!);
+  }
+  if (options.maxConversions !== undefined) {
+    filtered = filtered.filter((row) => (row.conversions ?? 0) <= options.maxConversions!);
+  }
+  const field = options.sortBy ?? "spend";
+  const sorted = [...filtered].sort((left, right) => (right[field] ?? 0) - (left[field] ?? 0));
+  const limit = Math.min(Math.max(options.limit ?? 20, 1), 1000);
+  return sorted.slice(0, limit);
 }
 
 function reportDateXml(isoDate: string): string {
@@ -260,7 +343,7 @@ export async function runPerformanceReport(params: {
       `<FormatVersion>2.0</FormatVersion>`,
       `<ReportName>${xmlEscape(`bing-mcp-${params.type}`)}</ReportName>`,
       `<ReturnOnlyCompleteData>false</ReturnOnlyCompleteData>`,
-      `<Aggregation>Daily</Aggregation>`,
+      `<Aggregation>${params.type === "SearchQueryPerformanceReportRequest" ? "Summary" : "Daily"}</Aggregation>`,
       `<Columns>${columns.map((column) => `<${columnTag}>${xmlEscape(column)}</${columnTag}>`).join("")}</Columns>`,
       `<Scope>${longArrayXml("AccountIds", [params.context.accountId])}${campaignScope}${adGroupScope}</Scope>`,
       buildReportTimeXml(window),
@@ -306,7 +389,7 @@ export async function runPerformanceReport(params: {
 
   const bytes = await downloadReportArchive(downloadUrl);
   const csv = unzipFirstTextFile(bytes);
-  const parsed = parseCsv(csv).map(mapRow);
+  const parsed = parseCsv(csv).filter((raw) => !isDiscardedReportRow(raw)).map(mapRow);
   const truncated = parsed.length > MAX_REPORT_ROWS;
   const rows = truncated ? parsed.slice(0, MAX_REPORT_ROWS) : parsed;
 
@@ -333,4 +416,4 @@ export async function runPerformanceReport(params: {
   };
 }
 
-export { parseCsv, mapRow, unzipFirstTextFile };
+export { parseCsv, mapRow, unzipFirstTextFile, isDiscardedReportRow };

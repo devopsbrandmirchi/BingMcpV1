@@ -63,7 +63,7 @@ function createInnerHandler() {
         version: APP_VERSION,
       },
       instructions:
-        "This is a standalone Microsoft Advertising MCP connector. Identify the operator with get_operator, list Microsoft connections with list_microsoft_connections, then list customers and accounts. Use list_campaigns, list_ad_groups, list_ads, list_keywords, list_conversion_goals, and list_uet_tags for entity reads. Use get_*_performance tools for official Reporting API data. Specify connectionId when the same advertising account is visible through more than one Microsoft connection. Never invent IDs. V1 is read-only.",
+        "This is a standalone Microsoft Advertising MCP connector. Identify the operator with get_operator, list Microsoft connections with list_microsoft_connections, then list customers and accounts. Use list_campaigns, list_ad_groups, list_ads, list_keywords, list_conversion_goals, and list_uet_tags for entity reads. Use get_*_performance tools for official Reporting API data. Use get_search_query_performance for actual user search queries, not get_keyword_performance. Specify connectionId when the same advertising account is visible through more than one Microsoft connection. Never invent IDs. V1 is read-only.",
       onEvent: (event) => {
         if (event.type === "ERROR") {
           logger.error("MCP handler error", {

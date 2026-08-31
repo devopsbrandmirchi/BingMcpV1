@@ -101,7 +101,22 @@ Customers / accounts: `list_microsoft_customers`, `get_microsoft_customer`, `lis
 
 Entities: `list_campaigns`, `get_campaign`, `list_ad_groups`, `get_ad_group`, `list_ads`, `get_ad`, `list_keywords`, `get_keyword`, `list_conversion_goals`, `get_conversion_goal`, `list_uet_tags`
 
-Reports (official Reporting API, async submit/poll/download): `get_account_performance`, `get_campaign_performance`, `get_ad_group_performance`, `get_keyword_performance`
+Reports (official Reporting API, async submit/poll/download): `get_account_performance`, `get_campaign_performance`, `get_ad_group_performance`, `get_keyword_performance`, `get_search_query_performance`
+
+`get_search_query_performance` uses Microsoft `SearchQueryPerformanceReportRequest` (SOAP `SubmitGenerateReport` / `PollGenerateReport`). It returns **user search queries**, not the keywords you bid on. Both `searchQuery` and `keyword` are returned when Microsoft provides them.
+
+Parameters: required `accountId`; optional `campaignId`, `adGroupId`, `connectionId`; `period` or `startDate`+`endDate`; `sortBy` (`spend`, `clicks`, `impressions`, `conversions`, default spend); `limit` (default 20); optional `minClicks` and `maxConversions`.
+
+Metrics: search query, keyword, campaign, ad group, impressions, clicks, spend, CTR, average CPC, conversions, conversion rate, cost per conversion.
+
+This report is for Search / search-network campaigns. Microsoft only includes queries with a significant number of clicks in the last 30 days. Performance Max search terms are not available. Current-day data may be incomplete.
+
+Example Claude queries:
+
+- Show me the top 20 search terms for Zoomers RV this month.
+- Show me search terms for campaign 123456 in August 2026.
+- Which search terms spent money but generated zero conversions?
+- Which search terms generated the most conversions?
 
 If the same advertising account is visible through more than one Microsoft connection, the server returns an ambiguity error and asks for `connectionId`. It never guesses.
 

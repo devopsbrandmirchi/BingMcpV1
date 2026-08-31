@@ -115,4 +115,48 @@ describe("reporting workflow", () => {
     expect(report.summary.spend).toBe(2);
     expect(String(fetchMock.mock.calls[2]?.[0])).toBe("https://example.com/report.zip?a=1&b=2");
   });
+
+  it("submits a Summary search query report with campaign scope", async () => {
+    const csv = [
+      "SearchQuery,Keyword,CampaignId,CampaignName,Impressions,Clicks,Spend,Conversions",
+      "newmar washington,newmar dealer,555,WA | Search | Newmar,125,18,42.50,1",
+    ].join("\n");
+    const archive = zipSync({ "report.csv": new TextEncoder().encode(csv) });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(),
+        text: async () =>
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><SubmitGenerateReportResponse xmlns="https://bingads.microsoft.com/Reporting/v13"><ReportRequestId>rep-sq</ReportRequestId></SubmitGenerateReportResponse></s:Body></s:Envelope>`,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(),
+        text: async () =>
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><PollGenerateReportResponse xmlns="https://bingads.microsoft.com/Reporting/v13"><ReportRequestStatus><Status>Success</Status><ReportDownloadUrl>https://example.com/search.zip</ReportDownloadUrl></ReportRequestStatus></PollGenerateReportResponse></s:Body></s:Envelope>`,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: async () => archive.buffer,
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const report = await runPerformanceReport({
+      context: { accessToken: "token", customerId: "11", accountId: "188378621" },
+      type: "SearchQueryPerformanceReportRequest",
+      startDate: "2026-08-01",
+      endDate: "2026-08-31",
+      campaignIds: ["555"],
+    });
+    expect(report.rows[0]?.searchQuery).toBe("newmar washington");
+    expect(report.rows[0]?.keyword).toBe("newmar dealer");
+    expect(report.rows[0]?.costPerConversion).toBe(42.5);
+    const submitBody = String(fetchMock.mock.calls[0]?.[1]?.body);
+    expect(submitBody).toContain('i:type="a:SearchQueryPerformanceReportRequest"');
+    expect(submitBody).toContain("<Aggregation>Summary</Aggregation>");
+    expect(submitBody).toContain("<SearchQueryPerformanceReportColumn>SearchQuery</SearchQueryPerformanceReportColumn>");
+    expect(submitBody).not.toContain("<SearchQueryPerformanceReportColumn>TimePeriod</SearchQueryPerformanceReportColumn>");
+    expect(submitBody).toContain("<CampaignId>555</CampaignId>");
+    expect(submitBody.indexOf("CustomDateRangeEnd")).toBeLessThan(submitBody.indexOf("CustomDateRangeStart"));
+  });
 });
