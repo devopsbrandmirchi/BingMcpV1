@@ -141,6 +141,24 @@ function splitCsvLine(line: string): string[] {
   return cells;
 }
 
+async function downloadReportArchive(url: string): Promise<Uint8Array> {
+  const retryable = new Set([409, 404, 429, 500, 502, 503]);
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const response = await fetch(url, { redirect: "follow" });
+    lastStatus = response.status;
+    if (response.ok) {
+      return new Uint8Array(await response.arrayBuffer());
+    }
+    if (!retryable.has(response.status) || attempt === 4) {
+      throw new ReportError(`The report download failed with HTTP ${response.status}.`);
+    }
+    logger.warn("Microsoft report download retry", { status: response.status, attempt });
+    await sleep(1000 * 2 ** attempt);
+  }
+  throw new ReportError(`The report download failed with HTTP ${lastStatus}.`);
+}
+
 function unzipFirstTextFile(buffer: Uint8Array): string {
   const files = unzipSync(buffer);
   const names = Object.keys(files);
@@ -272,7 +290,9 @@ export async function runPerformanceReport(params: {
     logger.info("Microsoft report poll", { requestId, reportRequestId, status });
     if (status === "Success") {
       downloadUrl = childText(polled, "ReportDownloadUrl") ?? undefined;
-      break;
+      if (downloadUrl) {
+        break;
+      }
     }
     if (status === "Error" || status === "Failed") {
       throw new ReportError("Microsoft Advertising failed to generate the report.");
@@ -284,11 +304,7 @@ export async function runPerformanceReport(params: {
     throw new ReportError("The Microsoft Advertising report timed out before completion.", "report_timeout");
   }
 
-  const download = await fetch(downloadUrl);
-  if (!download.ok) {
-    throw new ReportError(`The report download failed with HTTP ${download.status}.`);
-  }
-  const bytes = new Uint8Array(await download.arrayBuffer());
+  const bytes = await downloadReportArchive(downloadUrl);
   const csv = unzipFirstTextFile(bytes);
   const parsed = parseCsv(csv).map(mapRow);
   const truncated = parsed.length > MAX_REPORT_ROWS;

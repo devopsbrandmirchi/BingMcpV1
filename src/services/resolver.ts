@@ -43,29 +43,35 @@ export async function resolveAccountAccess(params: {
   customerId?: string;
   accountId: string;
 }): Promise<ResolvedAccountAccess> {
-  const matches = (await getAppStore().findAccountsByAccountId(params.operatorId, params.accountId)).filter(
-    (item) => {
-      if (params.connectionId && item.connectionId !== params.connectionId) {
-        return false;
-      }
-      if (params.customerId && item.customerId !== params.customerId) {
-        return false;
-      }
-      return true;
-    },
-  );
+  const store = getAppStore();
+  const candidates = await store.findAccountsByAccountId(params.operatorId, params.accountId);
+  const matches: MicrosoftAccountRecord[] = [];
+  for (const item of candidates) {
+    if (params.connectionId && item.connectionId !== params.connectionId) {
+      continue;
+    }
+    if (params.customerId && item.customerId !== params.customerId) {
+      continue;
+    }
+    const connection = await store.getConnection(item.connectionId);
+    if (!connection || connection.operatorId !== params.operatorId || connection.status === "disconnected") {
+      continue;
+    }
+    matches.push(item);
+  }
 
   if (matches.length === 0) {
     throw new AccountNotFoundError();
   }
   if (matches.length > 1) {
+    const connectionIds = [...new Set(matches.map((item) => item.connectionId))];
     throw new AmbiguousAccountError(
-      `Multiple Microsoft connections have access to account ${params.accountId}. Please specify connectionId.`,
+      `Multiple Microsoft connections have access to account ${params.accountId}. Retry with connectionId set to one of: ${connectionIds.join(", ")}.`,
     );
   }
   const account = matches[0] as MicrosoftAccountRecord;
   const connection = await resolveOwnedConnection(params.operatorId, account.connectionId);
-  const customer = await getAppStore().getCustomer(
+  const customer = await store.getCustomer(
     params.operatorId,
     account.connectionId,
     account.customerId,
@@ -83,15 +89,26 @@ export async function resolveCustomerAccess(params: {
   connection: MicrosoftConnectionRecord;
   customer: MicrosoftCustomerRecord;
 }> {
-  const matches = (await getAppStore().findCustomersByCustomerId(params.operatorId, params.customerId)).filter(
-    (item) => !params.connectionId || item.connectionId === params.connectionId,
-  );
+  const store = getAppStore();
+  const candidates = await store.findCustomersByCustomerId(params.operatorId, params.customerId);
+  const matches: MicrosoftCustomerRecord[] = [];
+  for (const item of candidates) {
+    if (params.connectionId && item.connectionId !== params.connectionId) {
+      continue;
+    }
+    const connection = await store.getConnection(item.connectionId);
+    if (!connection || connection.operatorId !== params.operatorId || connection.status === "disconnected") {
+      continue;
+    }
+    matches.push(item);
+  }
   if (matches.length === 0) {
     throw new CustomerNotFoundError();
   }
   if (matches.length > 1) {
+    const connectionIds = [...new Set(matches.map((item) => item.connectionId))];
     throw new AmbiguousAccountError(
-      `Multiple Microsoft connections have access to customer ${params.customerId}. Please specify connectionId.`,
+      `Multiple Microsoft connections have access to customer ${params.customerId}. Retry with connectionId set to one of: ${connectionIds.join(", ")}.`,
     );
   }
   const customer = matches[0] as MicrosoftCustomerRecord;

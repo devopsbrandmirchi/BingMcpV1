@@ -15,12 +15,23 @@ export function stripXmlNamespaces(xml: string): string {
     .replace(/\s(?:xsi|i):nil="[^"]*"/g, "");
 }
 
+export function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCharCode(Number(dec)));
+}
+
 export function childText(xml: string, tag: string): string | null {
   const match = xml.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, "i"));
   if (!match) {
     return null;
   }
-  const value = (match[1] ?? "").trim();
+  const value = decodeXmlEntities((match[1] ?? "").trim());
   return value.length > 0 ? value : null;
 }
 

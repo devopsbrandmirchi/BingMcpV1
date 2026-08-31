@@ -1,15 +1,16 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { encryptRefreshToken } from "@/lib/crypto";
 import { runWithOperator } from "@/lib/request-context";
 import { issueAccessToken, readAccessToken } from "@/mcp/oauth/tokens";
-import {
-  AmbiguousAccountError,
-  ConnectionNotFoundError,
-} from "@/lib/errors";
+import { ConnectionNotFoundError } from "@/lib/errors";
 import { resolveAccountAccess } from "@/services/resolver";
 import { createMemoryAppStore } from "@/store/memory";
 import { resetAppStore, setAppStore } from "@/store/app-store";
 import { setRequiredEnv } from "@/test/env";
+
+vi.mock("@/services/tokenService", () => ({
+  getAccessTokenForConnection: vi.fn(async () => "access-token"),
+}));
 
 describe("True Model B ownership", () => {
   beforeEach(() => {
@@ -136,7 +137,57 @@ describe("True Model B ownership", () => {
           operatorId: operator.operatorId,
           accountId: "123",
         }),
-      ).rejects.toBeInstanceOf(AmbiguousAccountError);
+      ).rejects.toMatchObject({
+        name: "AmbiguousAccountError",
+        message: expect.stringContaining(connectionX.connectionId),
+      });
+    });
+  });
+
+  it("ignores disconnected connections when resolving an account", async () => {
+    const { getAppStore } = await import("@/store/app-store");
+    const store = getAppStore();
+    const operator = await store.createOperator("a@example.com");
+    const live = await store.upsertConnection({
+      operatorId: operator.operatorId,
+      microsoftSubjectId: "ms-live",
+      encryptedRefreshToken: encryptRefreshToken("rl"),
+    });
+    const stale = await store.upsertConnection({
+      operatorId: operator.operatorId,
+      microsoftSubjectId: "ms-stale",
+      encryptedRefreshToken: encryptRefreshToken("rs"),
+    });
+    const account = {
+      customerId: "c1",
+      accountId: "188405633",
+      accountName: "Zoomers RV",
+      accountNumber: "G12068D5",
+      status: "Active",
+      currencyCode: "USD",
+      timeZone: "CentralTimeUSCanada",
+      accountType: "Advertiser",
+    };
+    await store.replaceConnectionResources(
+      operator.operatorId,
+      live.connectionId,
+      [{ customerId: "c1", customerName: "C1", customerNumber: null, status: "Active" }],
+      [account],
+    );
+    await store.replaceConnectionResources(
+      operator.operatorId,
+      stale.connectionId,
+      [{ customerId: "c1", customerName: "C1", customerNumber: null, status: "Active" }],
+      [account],
+    );
+    await store.disconnectConnection(operator.operatorId, stale.connectionId);
+
+    await runWithOperator({ requestId: "r2", operatorId: operator.operatorId }, async () => {
+      const resolved = await resolveAccountAccess({
+        operatorId: operator.operatorId,
+        accountId: "188405633",
+      });
+      expect(resolved.connection.connectionId).toBe(live.connectionId);
     });
   });
 });
