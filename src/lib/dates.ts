@@ -39,3 +39,39 @@ export function toMicrosoftReportDate(isoDate: string): { Year: number; Month: n
   const [year, month, day] = isoDate.split("-").map(Number);
   return { Year: year as number, Month: month as number, Day: day as number };
 }
+
+export const REPORT_TIME_PERIODS = [
+  "Today",
+  "Yesterday",
+  "LastSevenDays",
+  "LastThirtyDays",
+  "ThisWeek",
+  "LastWeek",
+  "ThisMonth",
+  "LastMonth",
+] as const;
+
+export type ReportTimePeriod = (typeof REPORT_TIME_PERIODS)[number];
+
+export function isReportTimePeriod(value: string): value is ReportTimePeriod {
+  return (REPORT_TIME_PERIODS as readonly string[]).includes(value);
+}
+
+export function assertReportWindow(input: {
+  period?: string;
+  startDate?: string;
+  endDate?: string;
+}): { period?: ReportTimePeriod; startDate?: string; endDate?: string } {
+  if (input.period) {
+    if (!isReportTimePeriod(input.period)) {
+      throw new ValidationError(`period must be one of: ${REPORT_TIME_PERIODS.join(", ")}.`);
+    }
+    return { period: input.period };
+  }
+  if (input.startDate && input.endDate) {
+    return assertDateRange(input.startDate, input.endDate);
+  }
+  throw new ValidationError(
+    "Provide period (ThisMonth, ThisWeek, LastSevenDays, ...) or both startDate and endDate as YYYY-MM-DD.",
+  );
+}

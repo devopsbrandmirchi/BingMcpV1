@@ -41,9 +41,43 @@ describe("reporting workflow", () => {
     expect(report.summary.clicks).toBe(5);
     expect(report.rows[0]?.accountId).toBe("123");
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("ReportingService.svc");
-    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain('i:type="AccountPerformanceReportRequest"');
-    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain("SubmitGenerateReportRequest");
+    const submitBody = String(fetchMock.mock.calls[0]?.[1]?.body);
+    expect(submitBody).toContain('i:type="a:AccountPerformanceReportRequest"');
+    expect(submitBody).toContain("SubmitGenerateReportRequest");
+    expect(submitBody.indexOf("CustomDateRangeEnd")).toBeLessThan(submitBody.indexOf("CustomDateRangeStart"));
     expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain("PollGenerateReportRequest");
     expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain("rep-1");
+  });
+
+  it("uses PredefinedTime for ThisMonth", async () => {
+    const csv = "TimePeriod,AccountId,Impressions,Clicks,Spend\n2026-08-01,123,10,1,2\n";
+    const archive = zipSync({ "report.csv": new TextEncoder().encode(csv) });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(),
+        text: async () =>
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><SubmitGenerateReportResponse xmlns="https://bingads.microsoft.com/Reporting/v13"><ReportRequestId>rep-2</ReportRequestId></SubmitGenerateReportResponse></s:Body></s:Envelope>`,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(),
+        text: async () =>
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><PollGenerateReportResponse xmlns="https://bingads.microsoft.com/Reporting/v13"><ReportRequestStatus><Status>Success</Status><ReportDownloadUrl>https://example.com/report.zip</ReportDownloadUrl></ReportRequestStatus></PollGenerateReportResponse></s:Body></s:Envelope>`,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: async () => archive.buffer,
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const report = await runPerformanceReport({
+      context: { accessToken: "token", customerId: "11", accountId: "188405633" },
+      type: "AccountPerformanceReportRequest",
+      period: "ThisMonth",
+    });
+    expect(report.summary.spend).toBe(2);
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain("<PredefinedTime>ThisMonth</PredefinedTime>");
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).not.toContain("CustomDateRangeStart");
   });
 });

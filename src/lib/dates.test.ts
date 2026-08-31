@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertDateRange, isIsoDate } from "@/lib/dates";
+import { assertDateRange, assertReportWindow, isIsoDate } from "@/lib/dates";
 
 describe("date validation", () => {
   it("accepts valid YYYY-MM-DD dates and rejects invalid ones", () => {
@@ -15,5 +15,14 @@ describe("date validation", () => {
       startDate: "2026-08-01",
       endDate: "2026-08-20",
     });
+  });
+
+  it("accepts a predefined Microsoft report period", () => {
+    expect(assertReportWindow({ period: "ThisMonth" })).toEqual({ period: "ThisMonth" });
+    expect(assertReportWindow({ startDate: "2026-08-01", endDate: "2026-08-31" })).toEqual({
+      startDate: "2026-08-01",
+      endDate: "2026-08-31",
+    });
+    expect(() => assertReportWindow({})).toThrow(/period/);
   });
 });

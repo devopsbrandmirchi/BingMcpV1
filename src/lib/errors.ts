@@ -196,7 +196,7 @@ export function mapMicrosoftError(error: unknown): AppError {
     );
   }
 
-  if (numericCode === 403 || lower.includes("permission") || lower.includes("not authorized")) {
+  if (numericCode === 106 || lower.includes("userisnotauthorized") || lower.includes("user is not authorized")) {
     return new AuthorizationError(
       "The requested Microsoft Advertising resource is not accessible through the selected connection.",
     );

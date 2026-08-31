@@ -1,5 +1,5 @@
 import { unzipSync } from "fflate";
-import { assertDateRange, toMicrosoftReportDate } from "@/lib/dates";
+import { assertReportWindow, toMicrosoftReportDate, type ReportTimePeriod } from "@/lib/dates";
 import { ReportError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { peekOperatorContext } from "@/lib/request-context";
@@ -171,21 +171,41 @@ function mapRow(raw: Record<string, string>): ReportRow {
   };
 }
 
+function reportDateXml(isoDate: string): string {
+  const { Year, Month, Day } = toMicrosoftReportDate(isoDate);
+  return `<Day>${Day}</Day><Month>${Month}</Month><Year>${Year}</Year>`;
+}
+
+function buildReportTimeXml(window: { period?: ReportTimePeriod; startDate?: string; endDate?: string }): string {
+  if (window.period) {
+    return `<Time><PredefinedTime>${xmlEscape(window.period)}</PredefinedTime></Time>`;
+  }
+  return [
+    `<Time>`,
+    `<CustomDateRangeEnd>${reportDateXml(window.endDate as string)}</CustomDateRangeEnd>`,
+    `<CustomDateRangeStart>${reportDateXml(window.startDate as string)}</CustomDateRangeStart>`,
+    `</Time>`,
+  ].join("");
+}
+
 export async function runPerformanceReport(params: {
   context: MicrosoftRequestContext & { customerId: string; accountId: string };
   type: PerformanceReportType;
-  startDate: string;
-  endDate: string;
+  startDate?: string;
+  endDate?: string;
+  period?: ReportTimePeriod;
   campaignIds?: string[];
   adGroupIds?: string[];
   keywordIds?: string[];
 }): Promise<NormalizedReport> {
-  const range = assertDateRange(params.startDate, params.endDate);
+  const window = assertReportWindow({
+    period: params.period,
+    startDate: params.startDate,
+    endDate: params.endDate,
+  });
   const requestId = peekOperatorContext()?.requestId;
   const columns = COLUMNS_BY_TYPE[params.type];
   const columnTag = params.type.replace("Request", "Column");
-  const start = toMicrosoftReportDate(range.startDate);
-  const end = toMicrosoftReportDate(range.endDate);
 
   const campaignScope = params.campaignIds?.length
     ? `<Campaigns>${params.campaignIds
@@ -214,7 +234,7 @@ export async function runPerformanceReport(params: {
     context: params.context,
     bodyXml: [
       `<SubmitGenerateReportRequest xmlns="${REPORTING_NAMESPACE}">`,
-      `<ReportRequest i:type="${params.type}">`,
+      `<ReportRequest i:type="a:${params.type}" xmlns:a="${REPORTING_NAMESPACE}">`,
       `<ExcludeColumnHeaders>false</ExcludeColumnHeaders>`,
       `<ExcludeReportFooter>true</ExcludeReportFooter>`,
       `<ExcludeReportHeader>true</ExcludeReportHeader>`,
@@ -225,10 +245,7 @@ export async function runPerformanceReport(params: {
       `<Aggregation>Daily</Aggregation>`,
       `<Columns>${columns.map((column) => `<${columnTag}>${xmlEscape(column)}</${columnTag}>`).join("")}</Columns>`,
       `<Scope>${longArrayXml("AccountIds", [params.context.accountId])}${campaignScope}${adGroupScope}</Scope>`,
-      `<Time>`,
-      `<CustomDateRangeStart><Day>${start.Day}</Day><Month>${start.Month}</Month><Year>${start.Year}</Year></CustomDateRangeStart>`,
-      `<CustomDateRangeEnd><Day>${end.Day}</Day><Month>${end.Month}</Month><Year>${end.Year}</Year></CustomDateRangeEnd>`,
-      `</Time>`,
+      buildReportTimeXml(window),
       `</ReportRequest>`,
       `</SubmitGenerateReportRequest>`,
     ].join(""),

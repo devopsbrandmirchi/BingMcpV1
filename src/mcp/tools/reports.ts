@@ -1,12 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { toToolErrorText } from "@/lib/errors";
+import type { ReportTimePeriod } from "@/lib/dates";
 import { runPerformanceReport, type PerformanceReportType } from "@/microsoft/reporting/api";
 import {
   isoDateSchema,
   jsonToolResult,
   microsoftIdSchema,
   optionalConnectionIdSchema,
+  reportPeriodSchema,
 } from "@/mcp/tools/schemas";
 import { loadCurrentOperatorRecord, resolveAccountAccess } from "@/services/resolver";
 
@@ -14,8 +16,9 @@ const reportBase = {
   accountId: microsoftIdSchema,
   customerId: microsoftIdSchema.optional(),
   connectionId: optionalConnectionIdSchema,
-  startDate: isoDateSchema,
-  endDate: isoDateSchema,
+  period: reportPeriodSchema.optional(),
+  startDate: isoDateSchema.optional(),
+  endDate: isoDateSchema.optional(),
 };
 
 async function runReport(
@@ -24,8 +27,9 @@ async function runReport(
     accountId: string;
     customerId?: string;
     connectionId?: string;
-    startDate: string;
-    endDate: string;
+    period?: ReportTimePeriod;
+    startDate?: string;
+    endDate?: string;
     campaignIds?: string[];
     adGroupIds?: string[];
   },
@@ -44,6 +48,7 @@ async function runReport(
       accountId: access.account.accountId,
     },
     type,
+    period: input.period,
     startDate: input.startDate,
     endDate: input.endDate,
     campaignIds: input.campaignIds,
@@ -57,7 +62,7 @@ export function registerReportTools(server: McpServer): void {
     {
       title: "Account performance report",
       description:
-        "Returns daily Microsoft Advertising account performance from the official Reporting API. Dates must be YYYY-MM-DD. Requires accountId.",
+        "Returns daily Microsoft Advertising account performance. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId.",
       inputSchema: z.object(reportBase),
     },
     async (input) => {
@@ -74,7 +79,7 @@ export function registerReportTools(server: McpServer): void {
     {
       title: "Campaign performance report",
       description:
-        "Returns daily campaign performance from the official Reporting API. Dates must be YYYY-MM-DD. Requires accountId. Optional campaignId filter.",
+        "Returns daily campaign performance. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId filter.",
       inputSchema: z.object({
         ...reportBase,
         campaignId: microsoftIdSchema.optional(),
@@ -99,7 +104,7 @@ export function registerReportTools(server: McpServer): void {
     {
       title: "Ad group performance report",
       description:
-        "Returns daily ad group performance from the official Reporting API. Dates must be YYYY-MM-DD. Requires accountId. Optional campaignId or adGroupId filters.",
+        "Returns daily ad group performance. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId or adGroupId filters.",
       inputSchema: z.object({
         ...reportBase,
         campaignId: microsoftIdSchema.optional(),
@@ -126,7 +131,7 @@ export function registerReportTools(server: McpServer): void {
     {
       title: "Keyword performance report",
       description:
-        "Returns daily keyword performance from the official Reporting API. Dates must be YYYY-MM-DD. Requires accountId. Optional campaignId or adGroupId filters.",
+        "Returns daily keyword performance. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId or adGroupId filters.",
       inputSchema: z.object({
         ...reportBase,
         campaignId: microsoftIdSchema.optional(),
