@@ -95,5 +95,34 @@ describe("Campaign Management adapters", () => {
     expect(JSON.stringify(tags[0])).not.toContain("do-not-return");
     expect(String(fetchMock.mock.calls[2]?.[1]?.body)).toContain("GetUetTagsByIdsRequest");
     expect(String(fetchMock.mock.calls[2]?.[1]?.body)).toContain('<TagIds i:nil="true"/>');
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).not.toContain("InStoreTransaction");
+  });
+
+  it("retries conversion goal list without pilot-gated types", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        headers: new Headers(),
+        text: async () =>
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><faultstring>The customer is not enabled for this pilot.</faultstring><detail><ApiFaultDetail xmlns="https://bingads.microsoft.com/CampaignManagement/v13"><TrackingId>track-pilot</TrackingId><OperationErrors><OperationError><Code>0</Code><ErrorCode>AppDownloadPilotNotEnabledForCustomer</ErrorCode><Message>The customer is not enabled for this pilot.</Message></OperationError></OperationErrors></ApiFaultDetail></detail></s:Fault></s:Body></s:Envelope>`,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(),
+        text: async () =>
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><GetConversionGoalsByIdsResponse xmlns="https://bingads.microsoft.com/CampaignManagement/v13"><ConversionGoals><ConversionGoal i:type="UrlGoal"><Id>901</Id><Name>Thank you page</Name><Type>Url</Type></ConversionGoal></ConversionGoals></GetConversionGoalsByIdsResponse></s:Body></s:Envelope>`,
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const goals = await getConversionGoalsByAccount({
+      accessToken: "token",
+      customerId: "11",
+      accountId: "188405633",
+    });
+    expect(goals[0]?.conversionGoalId).toBe("901");
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain("AppDownload");
+    expect(String(fetchMock.mock.calls[1]?.[1]?.body)).not.toContain("AppDownload");
+    expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain("Url Duration PagesViewedPerVisit Event");
   });
 });

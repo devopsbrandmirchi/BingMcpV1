@@ -7,8 +7,10 @@ import {
 import type { MicrosoftRequestContext } from "@/microsoft/client/headers";
 import type { Ad, AdGroup, Campaign, ConversionGoal, Keyword, UetTag } from "@/microsoft/models/types";
 
-const ALL_CONVERSION_GOAL_TYPES =
-  "Url Duration PagesViewedPerVisit Event AppInstall OfflineConversion InStoreTransaction AppDownload";
+// InStoreTransaction is alpha-pilot only. Requesting it fails the entire list
+// with InStoreTransactionPilotNotEnabledForCustomer for customers not in the pilot.
+const CONVERSION_GOAL_TYPES =
+  "Url Duration PagesViewedPerVisit Event AppInstall OfflineConversion AppDownload";
 
 const CONVERSION_GOAL_ADDITIONAL_FIELDS =
   "AttributionModelType ViewThroughConversionWindowInMinutes";
@@ -331,31 +333,67 @@ function mapUetTag(
   };
 }
 
-export async function getConversionGoalsByAccount(
+function typesWithoutPilotError(types: string, error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = message.match(/([A-Za-z][A-Za-z0-9]*)PilotNotEnabled/i);
+  if (!match?.[1]) {
+    return null;
+  }
+  const blocked = match[1].toLowerCase();
+  const remaining = types.split(/\s+/).filter((type) => type.toLowerCase() !== blocked);
+  if (remaining.length === 0 || remaining.length === types.split(/\s+/).filter(Boolean).length) {
+    return null;
+  }
+  return remaining.join(" ");
+}
+
+async function fetchConversionGoals(
   context: MicrosoftRequestContext & { customerId: string; accountId: string },
+  conversionGoalIds: string[] | null,
+  types: string,
 ): Promise<ConversionGoal[]> {
+  const idsXml = conversionGoalIds
+    ? longArrayXml("ConversionGoalIds", conversionGoalIds)
+    : `<ConversionGoalIds i:nil="true"/>`;
   const xml = await campaignSoap(
     context,
     "GetConversionGoalsByIds",
-    `<ConversionGoalIds i:nil="true"/><ConversionGoalTypes>${ALL_CONVERSION_GOAL_TYPES}</ConversionGoalTypes><ReturnAdditionalFields>${CONVERSION_GOAL_ADDITIONAL_FIELDS}</ReturnAdditionalFields>`,
+    `${idsXml}<ConversionGoalTypes>${types}</ConversionGoalTypes><ReturnAdditionalFields>${CONVERSION_GOAL_ADDITIONAL_FIELDS}</ReturnAdditionalFields>`,
   );
   return conversionGoalBlocks(xml)
     .map(({ inner, typeHint }) => mapConversionGoal(inner, context, typeHint))
     .filter((item): item is ConversionGoal => Boolean(item));
 }
 
+async function getConversionGoalsWithPilotFallback(
+  context: MicrosoftRequestContext & { customerId: string; accountId: string },
+  conversionGoalIds: string[] | null,
+): Promise<ConversionGoal[]> {
+  let types = CONVERSION_GOAL_TYPES;
+  for (;;) {
+    try {
+      return await fetchConversionGoals(context, conversionGoalIds, types);
+    } catch (error) {
+      const nextTypes = typesWithoutPilotError(types, error);
+      if (!nextTypes) {
+        throw error;
+      }
+      types = nextTypes;
+    }
+  }
+}
+
+export async function getConversionGoalsByAccount(
+  context: MicrosoftRequestContext & { customerId: string; accountId: string },
+): Promise<ConversionGoal[]> {
+  return getConversionGoalsWithPilotFallback(context, null);
+}
+
 export async function getConversionGoalsByIds(
   context: MicrosoftRequestContext & { customerId: string; accountId: string },
   conversionGoalIds: string[],
 ): Promise<ConversionGoal[]> {
-  const xml = await campaignSoap(
-    context,
-    "GetConversionGoalsByIds",
-    `${longArrayXml("ConversionGoalIds", conversionGoalIds)}<ConversionGoalTypes>${ALL_CONVERSION_GOAL_TYPES}</ConversionGoalTypes><ReturnAdditionalFields>${CONVERSION_GOAL_ADDITIONAL_FIELDS}</ReturnAdditionalFields>`,
-  );
-  return conversionGoalBlocks(xml)
-    .map(({ inner, typeHint }) => mapConversionGoal(inner, context, typeHint))
-    .filter((item): item is ConversionGoal => Boolean(item));
+  return getConversionGoalsWithPilotFallback(context, conversionGoalIds);
 }
 
 export async function getUetTagsByAccount(
