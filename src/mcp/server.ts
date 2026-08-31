@@ -16,6 +16,7 @@ import { registerAdGroupTools } from "@/mcp/tools/adgroups";
 import { registerAdTools } from "@/mcp/tools/ads";
 import { registerCampaignTools } from "@/mcp/tools/campaigns";
 import { registerConnectionTools } from "@/mcp/tools/connections";
+import { registerConversionGoalTools } from "@/mcp/tools/conversion-goals";
 import { registerCustomerTools } from "@/mcp/tools/customers";
 import { registerKeywordTools } from "@/mcp/tools/keywords";
 import { registerGetOperatorTool } from "@/mcp/tools/operator";
@@ -53,6 +54,7 @@ function createInnerHandler() {
       registerAdGroupTools(server);
       registerAdTools(server);
       registerKeywordTools(server);
+      registerConversionGoalTools(server);
       registerReportTools(server);
     },
     {
@@ -61,7 +63,7 @@ function createInnerHandler() {
         version: APP_VERSION,
       },
       instructions:
-        "This is a standalone Microsoft Advertising MCP connector. Identify the operator with get_operator, list Microsoft connections with list_microsoft_connections, then list customers and accounts. Use list_campaigns, list_ad_groups, list_ads, and list_keywords for entity reads. Use get_*_performance tools for official Reporting API data. Specify connectionId when the same advertising account is visible through more than one Microsoft connection. Never invent IDs. V1 is read-only.",
+        "This is a standalone Microsoft Advertising MCP connector. Identify the operator with get_operator, list Microsoft connections with list_microsoft_connections, then list customers and accounts. Use list_campaigns, list_ad_groups, list_ads, list_keywords, list_conversion_goals, and list_uet_tags for entity reads. Use get_*_performance tools for official Reporting API data. Specify connectionId when the same advertising account is visible through more than one Microsoft connection. Never invent IDs. V1 is read-only.",
       onEvent: (event) => {
         if (event.type === "ERROR") {
           logger.error("MCP handler error", {

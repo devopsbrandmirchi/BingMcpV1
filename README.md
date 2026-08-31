@@ -99,7 +99,7 @@ Connections: `get_operator`, `list_microsoft_connections`, `get_microsoft_connec
 
 Customers / accounts: `list_microsoft_customers`, `get_microsoft_customer`, `list_microsoft_accounts`, `get_microsoft_account`
 
-Entities: `list_campaigns`, `get_campaign`, `list_ad_groups`, `get_ad_group`, `list_ads`, `get_ad`, `list_keywords`, `get_keyword`
+Entities: `list_campaigns`, `get_campaign`, `list_ad_groups`, `get_ad_group`, `list_ads`, `get_ad`, `list_keywords`, `get_keyword`, `list_conversion_goals`, `get_conversion_goal`, `list_uet_tags`
 
 Reports (official Reporting API, async submit/poll/download): `get_account_performance`, `get_campaign_performance`, `get_ad_group_performance`, `get_keyword_performance`
 

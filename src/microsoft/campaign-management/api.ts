@@ -5,7 +5,13 @@ import {
   CAMPAIGN_MANAGEMENT_SOAP_URL,
 } from "@/microsoft/client/version";
 import type { MicrosoftRequestContext } from "@/microsoft/client/headers";
-import type { Ad, AdGroup, Campaign, Keyword } from "@/microsoft/models/types";
+import type { Ad, AdGroup, Campaign, ConversionGoal, Keyword, UetTag } from "@/microsoft/models/types";
+
+const ALL_CONVERSION_GOAL_TYPES =
+  "Url Duration PagesViewedPerVisit Event AppInstall OfflineConversion InStoreTransaction AppDownload";
+
+const CONVERSION_GOAL_ADDITIONAL_FIELDS =
+  "AttributionModelType ViewThroughConversionWindowInMinutes";
 
 const ALL_CAMPAIGN_TYPES = "Search Shopping DynamicSearchAds Audience Hotel PerformanceMax App";
 
@@ -228,6 +234,141 @@ export async function getKeywordsByAdGroupId(
   return childBlocks(xml, "Keyword")
     .map((block) => mapKeyword(block, { ...context, adGroupId }))
     .filter((item): item is Keyword => Boolean(item));
+}
+
+function asBoolean(value: string | null | undefined): boolean | null {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return null;
+}
+
+function conversionGoalBlocks(xml: string): Array<{ inner: string; typeHint: string | null }> {
+  const regex = /<ConversionGoal(\s[^>]*)?>([\s\S]*?)<\/ConversionGoal>/gi;
+  const blocks: Array<{ inner: string; typeHint: string | null }> = [];
+  let match = regex.exec(xml);
+  while (match) {
+    const attrs = match[1] ?? "";
+    const typeHint = attrs.match(/\b(?:i:)?type="([^"]+)"/i)?.[1] ?? null;
+    blocks.push({ inner: match[2] ?? "", typeHint });
+    match = regex.exec(xml);
+  }
+  return blocks;
+}
+
+function goalTypeFromHint(hint: string | null): string | null {
+  if (!hint) {
+    return null;
+  }
+  return hint.replace(/Goal$/i, "") || hint;
+}
+
+function mapConversionGoal(
+  block: string,
+  context: { accountId: string; customerId: string },
+  typeHint?: string | null,
+): ConversionGoal | null {
+  const conversionGoalId = childText(block, "Id");
+  if (!conversionGoalId) {
+    return null;
+  }
+  const revenueBlock = childBlocks(block, "Revenue")[0];
+  const withoutRevenue = block.replace(/<Revenue[\s\S]*?<\/Revenue>/gi, "");
+  return {
+    conversionGoalId,
+    accountId: context.accountId,
+    customerId: context.customerId,
+    name: asString(childText(block, "Name")),
+    type: goalTypeFromHint(typeHint ?? null) ?? asString(childText(withoutRevenue, "Type")),
+    status: asString(childText(block, "Status")),
+    trackingStatus: asString(childText(block, "TrackingStatus")),
+    tagId: asString(childText(block, "TagId")),
+    scope: asString(childText(block, "Scope")),
+    countType: asString(childText(block, "CountType")),
+    goalCategory: asString(childText(block, "GoalCategory")),
+    excludeFromBidding: asBoolean(childText(block, "ExcludeFromBidding")),
+    isAutoGoal: asBoolean(childText(block, "IsAutoGoal")),
+    isEnhancedConversionsEnabled: asBoolean(childText(block, "IsEnhancedConversionsEnabled")),
+    conversionWindowInMinutes: asNumber(childText(block, "ConversionWindowInMinutes")),
+    viewThroughConversionWindowInMinutes: asNumber(childText(block, "ViewThroughConversionWindowInMinutes")),
+    attributionModelType: asString(childText(block, "AttributionModelType")),
+    revenue: revenueBlock
+      ? {
+          type: asString(childText(revenueBlock, "Type")),
+          value: asNumber(childText(revenueBlock, "Value")),
+          currencyCode: asString(childText(revenueBlock, "CurrencyCode")),
+        }
+      : null,
+    urlExpression: asString(childText(block, "UrlExpression")),
+    urlOperator: asString(childText(block, "UrlOperator")),
+    actionExpression: asString(childText(block, "ActionExpression")),
+    categoryExpression: asString(childText(block, "CategoryExpression")),
+    labelExpression: asString(childText(block, "LabelExpression")),
+    minimumDurationInSeconds: asNumber(childText(block, "MinimumDurationInSeconds")),
+    minimumPagesViewed: asNumber(childText(block, "MinimumPagesViewed")),
+  };
+}
+
+function mapUetTag(
+  block: string,
+  context: { accountId: string; customerId: string },
+): UetTag | null {
+  const uetTagId = childText(block, "Id");
+  if (!uetTagId) {
+    return null;
+  }
+  return {
+    uetTagId,
+    accountId: context.accountId,
+    customerId: context.customerId,
+    name: asString(childText(block, "Name")),
+    description: asString(childText(block, "Description")),
+    trackingStatus: asString(childText(block, "TrackingStatus")),
+    industry: asString(childText(block, "Industry")),
+  };
+}
+
+export async function getConversionGoalsByAccount(
+  context: MicrosoftRequestContext & { customerId: string; accountId: string },
+): Promise<ConversionGoal[]> {
+  const xml = await campaignSoap(
+    context,
+    "GetConversionGoalsByIds",
+    `<ConversionGoalIds i:nil="true"/><ConversionGoalTypes>${ALL_CONVERSION_GOAL_TYPES}</ConversionGoalTypes><ReturnAdditionalFields>${CONVERSION_GOAL_ADDITIONAL_FIELDS}</ReturnAdditionalFields>`,
+  );
+  return conversionGoalBlocks(xml)
+    .map(({ inner, typeHint }) => mapConversionGoal(inner, context, typeHint))
+    .filter((item): item is ConversionGoal => Boolean(item));
+}
+
+export async function getConversionGoalsByIds(
+  context: MicrosoftRequestContext & { customerId: string; accountId: string },
+  conversionGoalIds: string[],
+): Promise<ConversionGoal[]> {
+  const xml = await campaignSoap(
+    context,
+    "GetConversionGoalsByIds",
+    `${longArrayXml("ConversionGoalIds", conversionGoalIds)}<ConversionGoalTypes>${ALL_CONVERSION_GOAL_TYPES}</ConversionGoalTypes><ReturnAdditionalFields>${CONVERSION_GOAL_ADDITIONAL_FIELDS}</ReturnAdditionalFields>`,
+  );
+  return conversionGoalBlocks(xml)
+    .map(({ inner, typeHint }) => mapConversionGoal(inner, context, typeHint))
+    .filter((item): item is ConversionGoal => Boolean(item));
+}
+
+export async function getUetTagsByAccount(
+  context: MicrosoftRequestContext & { customerId: string; accountId: string },
+): Promise<UetTag[]> {
+  const xml = await campaignSoap(
+    context,
+    "GetUetTagsByIds",
+    `<TagIds i:nil="true"/>`,
+  );
+  return childBlocks(xml, "UetTag")
+    .map((block) => mapUetTag(block, context))
+    .filter((item): item is UetTag => Boolean(item));
 }
 
 export async function getKeywordsByIds(
