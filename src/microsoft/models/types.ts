@@ -111,6 +111,10 @@ export interface ReportSummary {
   clicks: number;
   spend: number;
   conversions?: number;
+  /** Sum of row revenue. Present only when at least one row reported revenue. */
+  revenue?: number;
+  /** revenue / spend. Present only when revenue was reported and spend > 0. */
+  returnOnAdSpend?: number;
 }
 
 export interface ReportRow {
@@ -132,6 +136,11 @@ export interface ReportRow {
   conversions?: number;
   conversionRate?: number;
   costPerConversion?: number | null;
+  /** Revenue reported with conversions. Blank in Microsoft's report when no conversion revenue was supplied. */
+  revenue?: number;
+  /** Microsoft's ReturnOnAdSpend value, passed through as returned. */
+  returnOnAdSpend?: number;
+  revenuePerConversion?: number;
 }
 
 export interface NormalizedReport {

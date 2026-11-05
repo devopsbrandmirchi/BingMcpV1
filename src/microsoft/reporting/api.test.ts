@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { zipSync } from "fflate";
 import {
+  buildReportColumns,
   isDiscardedReportRow,
   mapRow,
   parseCsv,
   rankSearchQueryRows,
+  resolveAggregation,
   unzipFirstTextFile,
 } from "@/microsoft/reporting/api";
 
@@ -75,6 +77,53 @@ describe("report parsing", () => {
     expect(
       rankSearchQueryRows(rows, { sortBy: "spend", minClicks: 1, maxConversions: 0 }).map((row) => row.searchQuery),
     ).toEqual(["b"]);
+  });
+
+  it("maps revenue columns and leaves them undefined when Microsoft returns blanks", () => {
+    const withRevenue = mapRow({
+      TimePeriod: "2026-08-17",
+      Spend: "20.97",
+      Conversions: "7",
+      Revenue: "1,250.50",
+      ReturnOnAdSpend: "59.63",
+      RevenuePerConversion: "178.64",
+    });
+    expect(withRevenue.revenue).toBe(1250.5);
+    expect(withRevenue.returnOnAdSpend).toBe(59.63);
+    expect(withRevenue.revenuePerConversion).toBe(178.64);
+
+    const blank = mapRow({ TimePeriod: "2026-08-18", Spend: "5", Conversions: "0", Revenue: "", ReturnOnAdSpend: "" });
+    expect(blank.revenue).toBeUndefined();
+    expect(blank.returnOnAdSpend).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(blank))).not.toHaveProperty("revenue");
+  });
+
+  it("requests revenue columns for account, campaign, ad group and keyword reports only", () => {
+    for (const type of [
+      "AccountPerformanceReportRequest",
+      "CampaignPerformanceReportRequest",
+      "AdGroupPerformanceReportRequest",
+      "KeywordPerformanceReportRequest",
+    ] as const) {
+      const columns = buildReportColumns(type, "Daily");
+      expect(columns).toContain("Revenue");
+      expect(columns).toContain("ReturnOnAdSpend");
+      expect(columns).toContain("RevenuePerConversion");
+      expect(columns).toContain("TimePeriod");
+    }
+    const searchQuery = buildReportColumns("SearchQueryPerformanceReportRequest", "Summary");
+    expect(searchQuery).not.toContain("Revenue");
+  });
+
+  it("keeps TimePeriod for Monthly and drops it for Summary", () => {
+    expect(buildReportColumns("CampaignPerformanceReportRequest", "Monthly")).toContain("TimePeriod");
+    expect(buildReportColumns("CampaignPerformanceReportRequest", "Summary")).not.toContain("TimePeriod");
+  });
+
+  it("defaults to Daily and always forces Summary for search queries", () => {
+    expect(resolveAggregation("AccountPerformanceReportRequest")).toBe("Daily");
+    expect(resolveAggregation("AccountPerformanceReportRequest", "Monthly")).toBe("Monthly");
+    expect(resolveAggregation("SearchQueryPerformanceReportRequest", "Daily")).toBe("Summary");
   });
 
   it("unzips the first text file from a report archive", () => {

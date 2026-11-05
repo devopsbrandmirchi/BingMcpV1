@@ -7,7 +7,7 @@ import { microsoftSoapRequest } from "@/microsoft/client/soap";
 import { childText, longArrayXml, stripXmlNamespaces, xmlEscape } from "@/microsoft/client/xml";
 import { REPORTING_NAMESPACE, REPORTING_SOAP_URL } from "@/microsoft/client/version";
 import type { MicrosoftRequestContext } from "@/microsoft/client/headers";
-import type { NormalizedReport, ReportRow } from "@/microsoft/models/types";
+import type { NormalizedReport, ReportRow, ReportSummary } from "@/microsoft/models/types";
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLL_MS = 240_000;
@@ -23,7 +23,25 @@ export type PerformanceReportType =
 export const SEARCH_QUERY_SORT_FIELDS = ["spend", "clicks", "impressions", "conversions"] as const;
 export type SearchQuerySortField = (typeof SEARCH_QUERY_SORT_FIELDS)[number];
 
-const COLUMNS_BY_TYPE: Record<PerformanceReportType, string[]> = {
+export const REPORT_AGGREGATIONS = ["Daily", "Weekly", "Monthly", "Yearly", "Summary"] as const;
+export type ReportAggregation = (typeof REPORT_AGGREGATIONS)[number];
+
+/**
+ * Revenue columns exist in Microsoft's Account, Campaign, AdGroup and Keyword
+ * report column sets. They are blank unless conversion revenue was reported
+ * (for example in an offline conversion upload), in which case they are omitted
+ * from the output rather than shown as zero.
+ * Not added to SearchQueryPerformanceReportRequest: its column set was not verified.
+ */
+const REVENUE_COLUMNS = ["Revenue", "ReturnOnAdSpend", "RevenuePerConversion"];
+const REVENUE_REPORT_TYPES = new Set<PerformanceReportType>([
+  "AccountPerformanceReportRequest",
+  "CampaignPerformanceReportRequest",
+  "AdGroupPerformanceReportRequest",
+  "KeywordPerformanceReportRequest",
+]);
+
+const BASE_COLUMNS_BY_TYPE: Record<PerformanceReportType, string[]> = {
   AccountPerformanceReportRequest: [
     "TimePeriod",
     "AccountId",
@@ -96,6 +114,29 @@ const COLUMNS_BY_TYPE: Record<PerformanceReportType, string[]> = {
     "CostPerConversion",
   ],
 };
+
+export function resolveAggregation(
+  type: PerformanceReportType,
+  requested?: ReportAggregation,
+): ReportAggregation {
+  // The search query report is always requested as a Summary, as before.
+  if (type === "SearchQueryPerformanceReportRequest") {
+    return "Summary";
+  }
+  return requested ?? "Daily";
+}
+
+export function buildReportColumns(type: PerformanceReportType, aggregation: ReportAggregation): string[] {
+  let columns = [...BASE_COLUMNS_BY_TYPE[type]];
+  if (REVENUE_REPORT_TYPES.has(type)) {
+    columns = [...columns, ...REVENUE_COLUMNS];
+  }
+  // A Summary report collapses the whole window into one row per entity, so it has no time column.
+  if (aggregation === "Summary") {
+    columns = columns.filter((column) => column !== "TimePeriod");
+  }
+  return columns;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -247,6 +288,9 @@ function mapRow(raw: Record<string, string>): ReportRow {
     conversions,
     conversionRate: parseNumber(raw.ConversionRate),
     costPerConversion: costPerConversion(raw, spend, conversions),
+    revenue: parseNumber(raw.Revenue),
+    returnOnAdSpend: parseNumber(raw.ReturnOnAdSpend),
+    revenuePerConversion: parseNumber(raw.RevenuePerConversion),
   };
 }
 
@@ -295,6 +339,7 @@ export async function runPerformanceReport(params: {
   startDate?: string;
   endDate?: string;
   period?: ReportTimePeriod;
+  aggregation?: ReportAggregation;
   campaignIds?: string[];
   adGroupIds?: string[];
   keywordIds?: string[];
@@ -305,7 +350,8 @@ export async function runPerformanceReport(params: {
     endDate: params.endDate,
   });
   const requestId = peekOperatorContext()?.requestId;
-  const columns = COLUMNS_BY_TYPE[params.type];
+  const aggregation = resolveAggregation(params.type, params.aggregation);
+  const columns = buildReportColumns(params.type, aggregation);
   const columnTag = params.type.replace("Request", "Column");
 
   const campaignScope = params.campaignIds?.length
@@ -343,7 +389,7 @@ export async function runPerformanceReport(params: {
       `<FormatVersion>2.0</FormatVersion>`,
       `<ReportName>${xmlEscape(`bing-mcp-${params.type}`)}</ReportName>`,
       `<ReturnOnlyCompleteData>false</ReturnOnlyCompleteData>`,
-      `<Aggregation>${params.type === "SearchQueryPerformanceReportRequest" ? "Summary" : "Daily"}</Aggregation>`,
+      `<Aggregation>${aggregation}</Aggregation>`,
       `<Columns>${columns.map((column) => `<${columnTag}>${xmlEscape(column)}</${columnTag}>`).join("")}</Columns>`,
       `<Scope>${longArrayXml("AccountIds", [params.context.accountId])}${campaignScope}${adGroupScope}</Scope>`,
       buildReportTimeXml(window),
@@ -393,20 +439,32 @@ export async function runPerformanceReport(params: {
   const truncated = parsed.length > MAX_REPORT_ROWS;
   const rows = truncated ? parsed.slice(0, MAX_REPORT_ROWS) : parsed;
 
-  const summary = rows.reduce(
+  const totals = rows.reduce<{
+    impressions: number;
+    clicks: number;
+    spend: number;
+    conversions: number;
+    revenue: number;
+    hasRevenue: boolean;
+  }>(
     (acc, row) => ({
       impressions: acc.impressions + (row.impressions ?? 0),
       clicks: acc.clicks + (row.clicks ?? 0),
       spend: acc.spend + (row.spend ?? 0),
       conversions: acc.conversions + (row.conversions ?? 0),
+      revenue: acc.revenue + (row.revenue ?? 0),
+      hasRevenue: acc.hasRevenue || row.revenue !== undefined,
     }),
-    { impressions: 0, clicks: 0, spend: 0, conversions: 0 } as {
-      impressions: number;
-      clicks: number;
-      spend: number;
-      conversions: number;
-    },
+    { impressions: 0, clicks: 0, spend: 0, conversions: 0, revenue: 0, hasRevenue: false },
   );
+  const { revenue, hasRevenue, ...base } = totals;
+  const summary: ReportSummary = { ...base };
+  if (hasRevenue) {
+    summary.revenue = revenue;
+    if (base.spend > 0) {
+      summary.returnOnAdSpend = revenue / base.spend;
+    }
+  }
 
   return {
     summary,

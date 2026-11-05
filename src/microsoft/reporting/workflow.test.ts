@@ -116,6 +116,88 @@ describe("reporting workflow", () => {
     expect(String(fetchMock.mock.calls[2]?.[0])).toBe("https://example.com/report.zip?a=1&b=2");
   });
 
+  it("submits a Monthly report with revenue columns and sums revenue into the summary", async () => {
+    const csv = [
+      "TimePeriod,AccountId,Impressions,Clicks,Spend,Conversions,Revenue,ReturnOnAdSpend,RevenuePerConversion",
+      "2026-07-01,123,100,10,50,2,300,6,150",
+      "2026-08-01,123,200,20,100,3,,,",
+    ].join("\n");
+    const archive = zipSync({ "report.csv": new TextEncoder().encode(csv) });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(),
+        text: async () =>
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><SubmitGenerateReportResponse xmlns="https://bingads.microsoft.com/Reporting/v13"><ReportRequestId>rep-m</ReportRequestId></SubmitGenerateReportResponse></s:Body></s:Envelope>`,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(),
+        text: async () =>
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><PollGenerateReportResponse xmlns="https://bingads.microsoft.com/Reporting/v13"><ReportRequestStatus><Status>Success</Status><ReportDownloadUrl>https://example.com/monthly.zip</ReportDownloadUrl></ReportRequestStatus></PollGenerateReportResponse></s:Body></s:Envelope>`,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: async () => archive.buffer,
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const report = await runPerformanceReport({
+      context: { accessToken: "token", customerId: "11", accountId: "123" },
+      type: "AccountPerformanceReportRequest",
+      startDate: "2026-07-01",
+      endDate: "2026-08-30",
+      aggregation: "Monthly",
+    });
+    const submitBody = String(fetchMock.mock.calls[0]?.[1]?.body);
+    expect(submitBody).toContain("<Aggregation>Monthly</Aggregation>");
+    expect(submitBody).toContain("<AccountPerformanceReportColumn>TimePeriod</AccountPerformanceReportColumn>");
+    expect(submitBody).toContain("<AccountPerformanceReportColumn>Revenue</AccountPerformanceReportColumn>");
+    expect(submitBody).toContain("<AccountPerformanceReportColumn>ReturnOnAdSpend</AccountPerformanceReportColumn>");
+    expect(report.rowCount).toBe(2);
+    expect(report.rows[0]?.revenue).toBe(300);
+    expect(report.rows[1]?.revenue).toBeUndefined();
+    expect(report.summary.revenue).toBe(300);
+    expect(report.summary.returnOnAdSpend).toBe(2);
+    expect(report.summary.spend).toBe(150);
+  });
+
+  it("omits revenue from the summary when no row reports it, and drops TimePeriod for Summary", async () => {
+    const csv = "AccountId,Impressions,Clicks,Spend,Conversions,Revenue\n123,100,5,12.5,0,\n";
+    const archive = zipSync({ "report.csv": new TextEncoder().encode(csv) });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(),
+        text: async () =>
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><SubmitGenerateReportResponse xmlns="https://bingads.microsoft.com/Reporting/v13"><ReportRequestId>rep-s</ReportRequestId></SubmitGenerateReportResponse></s:Body></s:Envelope>`,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(),
+        text: async () =>
+          `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><PollGenerateReportResponse xmlns="https://bingads.microsoft.com/Reporting/v13"><ReportRequestStatus><Status>Success</Status><ReportDownloadUrl>https://example.com/summary.zip</ReportDownloadUrl></ReportRequestStatus></PollGenerateReportResponse></s:Body></s:Envelope>`,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: async () => archive.buffer,
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const report = await runPerformanceReport({
+      context: { accessToken: "token", customerId: "11", accountId: "123" },
+      type: "AccountPerformanceReportRequest",
+      period: "ThisMonth",
+      aggregation: "Summary",
+    });
+    const submitBody = String(fetchMock.mock.calls[0]?.[1]?.body);
+    expect(submitBody).toContain("<Aggregation>Summary</Aggregation>");
+    expect(submitBody).not.toContain("<AccountPerformanceReportColumn>TimePeriod</AccountPerformanceReportColumn>");
+    expect(report.summary).not.toHaveProperty("revenue");
+    expect(report.summary).not.toHaveProperty("returnOnAdSpend");
+    expect(report.summary.spend).toBe(12.5);
+  });
+
   it("submits a Summary search query report with campaign scope", async () => {
     const csv = [
       "SearchQuery,Keyword,CampaignId,CampaignName,Impressions,Clicks,Spend,Conversions",

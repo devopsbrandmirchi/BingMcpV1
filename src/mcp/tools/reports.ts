@@ -4,9 +4,11 @@ import { toToolErrorText } from "@/lib/errors";
 import type { ReportTimePeriod } from "@/lib/dates";
 import {
   rankSearchQueryRows,
+  REPORT_AGGREGATIONS,
   runPerformanceReport,
   SEARCH_QUERY_SORT_FIELDS,
   type PerformanceReportType,
+  type ReportAggregation,
 } from "@/microsoft/reporting/api";
 import {
   isoDateSchema,
@@ -17,13 +19,26 @@ import {
 } from "@/mcp/tools/schemas";
 import { loadCurrentOperatorRecord, resolveAccountAccess } from "@/services/resolver";
 
-const reportBase = {
+const reportWindow = {
   accountId: microsoftIdSchema,
   customerId: microsoftIdSchema.optional(),
   connectionId: optionalConnectionIdSchema,
   period: reportPeriodSchema.optional(),
   startDate: isoDateSchema.optional(),
   endDate: isoDateSchema.optional(),
+};
+
+const aggregationSchema = z
+  .enum(REPORT_AGGREGATIONS)
+  .optional()
+  .describe(
+    "Row grouping. Daily (default) returns one row per day. Monthly returns one row per calendar month in the window. Weekly and Yearly work the same way. Summary returns a single total row per entity with no date.",
+  );
+
+// Everything except the search query report supports a choice of aggregation.
+const reportBase = {
+  ...reportWindow,
+  aggregation: aggregationSchema,
 };
 
 async function runReport(
@@ -35,6 +50,7 @@ async function runReport(
     period?: ReportTimePeriod;
     startDate?: string;
     endDate?: string;
+    aggregation?: ReportAggregation;
     campaignIds?: string[];
     adGroupIds?: string[];
   },
@@ -56,6 +72,7 @@ async function runReport(
     period: input.period,
     startDate: input.startDate,
     endDate: input.endDate,
+    aggregation: input.aggregation,
     campaignIds: input.campaignIds,
     adGroupIds: input.adGroupIds,
   });
@@ -67,7 +84,7 @@ export function registerReportTools(server: McpServer): void {
     {
       title: "Account performance report",
       description:
-        "Returns daily Microsoft Advertising account performance. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId.",
+        "Returns Microsoft Advertising account performance, daily by default (set aggregation=Monthly for a month roll-up, or Summary for one total row). Includes revenue, returnOnAdSpend and revenuePerConversion when conversion revenue has been reported to Microsoft; they are omitted otherwise. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId.",
       inputSchema: z.object(reportBase),
     },
     async (input) => {
@@ -84,7 +101,7 @@ export function registerReportTools(server: McpServer): void {
     {
       title: "Campaign performance report",
       description:
-        "Returns daily campaign performance. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId filter.",
+        "Returns campaign performance, daily by default (set aggregation=Monthly for a month roll-up, or Summary for one total row per campaign). Includes revenue, returnOnAdSpend and revenuePerConversion when conversion revenue has been reported to Microsoft; they are omitted otherwise. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId filter.",
       inputSchema: z.object({
         ...reportBase,
         campaignId: microsoftIdSchema.optional(),
@@ -109,7 +126,7 @@ export function registerReportTools(server: McpServer): void {
     {
       title: "Ad group performance report",
       description:
-        "Returns daily ad group performance. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId or adGroupId filters.",
+        "Returns ad group performance, daily by default (set aggregation=Monthly for a month roll-up, or Summary for one total row per ad group). Includes revenue, returnOnAdSpend and revenuePerConversion when conversion revenue has been reported to Microsoft; they are omitted otherwise. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId or adGroupId filters.",
       inputSchema: z.object({
         ...reportBase,
         campaignId: microsoftIdSchema.optional(),
@@ -136,7 +153,7 @@ export function registerReportTools(server: McpServer): void {
     {
       title: "Keyword performance report",
       description:
-        "Returns daily keyword performance. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId or adGroupId filters.",
+        "Returns keyword performance, daily by default (set aggregation=Monthly for a month roll-up, or Summary for one total row per keyword). Includes revenue, returnOnAdSpend and revenuePerConversion when conversion revenue has been reported to Microsoft; they are omitted otherwise. Prefer period=ThisMonth or ThisWeek. Otherwise provide startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId or adGroupId filters.",
       inputSchema: z.object({
         ...reportBase,
         campaignId: microsoftIdSchema.optional(),
@@ -165,7 +182,7 @@ export function registerReportTools(server: McpServer): void {
       description:
         "Returns actual user search queries (search terms) that triggered ads, not the keywords you bid on. Uses Microsoft SearchQueryPerformanceReport. Prefer period=ThisMonth or ThisWeek, or startDate and endDate as YYYY-MM-DD. Requires accountId. Optional campaignId or adGroupId. Default sort is spend descending. Microsoft only returns queries with a significant number of clicks in the last 30 days, and search-query data applies to Search/search-network campaigns (not Performance Max). Current-day data may be incomplete.",
       inputSchema: z.object({
-        ...reportBase,
+        ...reportWindow,
         campaignId: microsoftIdSchema.optional(),
         adGroupId: microsoftIdSchema.optional(),
         sortBy: z.enum(SEARCH_QUERY_SORT_FIELDS).default("spend"),
